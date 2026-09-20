@@ -16,13 +16,19 @@ from .models import (
     Canal,
     Cliente,
     Decision,
+    Escalamiento,
+    EstadoEntrega,
     Estatus,
+    Estrategia,
     Etapa,
     Lead,
     Llamada,
     MemoriaResumen,
     Mensaje,
     NivelDecision,
+    Patron,
+    RegistroResultado,
+    ahora,
 )
 
 
@@ -79,6 +85,48 @@ CREATE TABLE IF NOT EXISTS memoria_resumen (
 CREATE TABLE IF NOT EXISTS contadores (
     nombre TEXT PRIMARY KEY,
     valor INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS eventos_procesados (
+    cliente_id TEXT NOT NULL,
+    canal TEXT NOT NULL,
+    evento_id TEXT NOT NULL,
+    fecha TEXT NOT NULL,
+    respuesta TEXT,
+    PRIMARY KEY (cliente_id, canal, evento_id)
+);
+CREATE TABLE IF NOT EXISTS escalamientos (
+    escalamiento_id TEXT NOT NULL,
+    cliente_id TEXT NOT NULL,
+    lead_id TEXT NOT NULL,
+    estado TEXT NOT NULL,
+    fecha_creacion TEXT NOT NULL,
+    datos TEXT NOT NULL,
+    PRIMARY KEY (cliente_id, escalamiento_id)
+);
+CREATE TABLE IF NOT EXISTS estrategias (
+    estrategia_id TEXT NOT NULL,
+    cliente_id TEXT NOT NULL,
+    nombre TEXT NOT NULL,
+    etapa TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    estado TEXT NOT NULL,
+    datos TEXT NOT NULL,
+    PRIMARY KEY (cliente_id, estrategia_id)
+);
+CREATE TABLE IF NOT EXISTS patrones (
+    patron_id TEXT NOT NULL,
+    cliente_id TEXT NOT NULL,
+    fecha TEXT NOT NULL,
+    datos TEXT NOT NULL,
+    PRIMARY KEY (cliente_id, patron_id)
+);
+CREATE TABLE IF NOT EXISTS resultados (
+    resultado_id TEXT NOT NULL,
+    cliente_id TEXT NOT NULL,
+    lead_id TEXT NOT NULL,
+    fecha TEXT NOT NULL,
+    datos TEXT NOT NULL,
+    PRIMARY KEY (cliente_id, resultado_id)
 );
 """
 
@@ -225,6 +273,30 @@ class Almacen:
         )
         return mensaje
 
+    def actualizar_entrega(
+        self,
+        cliente_id: str,
+        mensaje_id: str,
+        estado: EstadoEntrega,
+        error: str | None = None,
+    ) -> Mensaje | None:
+        """Estado de entrega real del canal (enviada / fallida) sobre el mensaje ya guardado."""
+        _exigir_cliente(cliente_id)
+        filas = self._consultar(
+            "SELECT datos FROM mensajes WHERE cliente_id = ? AND mensaje_id = ?",
+            (cliente_id, mensaje_id),
+        )
+        if not filas:
+            return None
+        mensaje = Mensaje.model_validate_json(filas[0]["datos"])
+        mensaje.estado_entrega = estado
+        mensaje.error_entrega = error
+        self._ejecutar(
+            "UPDATE mensajes SET datos = ? WHERE cliente_id = ? AND mensaje_id = ?",
+            (_volcar(mensaje), cliente_id, mensaje_id),
+        )
+        return mensaje
+
     def historial(self, cliente_id: str, lead_id: str, limite: int = 20) -> list[Mensaje]:
         _exigir_cliente(cliente_id)
         filas = self._consultar(
@@ -322,6 +394,171 @@ class Almacen:
         parametros.append(limite)
         filas = self._consultar(sql, parametros)
         return list(reversed([MemoriaResumen.model_validate_json(f["datos"]) for f in filas]))
+
+    # --- idempotencia de webhooks ---------------------------------------
+    def evento_ya_procesado(self, cliente_id: str, canal: str, evento_id: str) -> str | None:
+        """Devuelve la respuesta guardada si el proveedor reenvia el mismo evento."""
+        _exigir_cliente(cliente_id)
+        filas = self._consultar(
+            "SELECT respuesta FROM eventos_procesados WHERE cliente_id = ? AND canal = ? "
+            "AND evento_id = ?",
+            (cliente_id, canal, evento_id),
+        )
+        return filas[0]["respuesta"] if filas else None
+
+    def marcar_evento(
+        self, cliente_id: str, canal: str, evento_id: str, respuesta: str | None = None
+    ) -> None:
+        _exigir_cliente(cliente_id)
+        self._ejecutar(
+            "INSERT INTO eventos_procesados (cliente_id, canal, evento_id, fecha, respuesta) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(cliente_id, canal, evento_id) DO UPDATE SET "
+            "respuesta = excluded.respuesta",
+            (cliente_id, canal, evento_id, ahora().isoformat(), respuesta),
+        )
+
+    # --- escalamientos ----------------------------------------------------
+    def guardar_escalamiento(self, escalamiento: Escalamiento) -> Escalamiento:
+        _exigir_cliente(escalamiento.cliente_id)
+        self._ejecutar(
+            "INSERT INTO escalamientos (escalamiento_id, cliente_id, lead_id, estado, "
+            "fecha_creacion, datos) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(cliente_id, escalamiento_id) DO UPDATE SET estado = excluded.estado, "
+            "datos = excluded.datos",
+            (
+                escalamiento.escalamiento_id,
+                escalamiento.cliente_id,
+                escalamiento.lead_id,
+                escalamiento.estado.value,
+                escalamiento.fecha_creacion.isoformat(),
+                _volcar(escalamiento),
+            ),
+        )
+        return escalamiento
+
+    def obtener_escalamiento(self, cliente_id: str, escalamiento_id: str) -> Escalamiento | None:
+        _exigir_cliente(cliente_id)
+        filas = self._consultar(
+            "SELECT datos FROM escalamientos WHERE cliente_id = ? AND escalamiento_id = ?",
+            (cliente_id, escalamiento_id),
+        )
+        return Escalamiento.model_validate_json(filas[0]["datos"]) if filas else None
+
+    def listar_escalamientos(
+        self, cliente_id: str, estado: str | None = None, lead_id: str | None = None
+    ) -> list[Escalamiento]:
+        _exigir_cliente(cliente_id)
+        sql = "SELECT datos FROM escalamientos WHERE cliente_id = ?"
+        parametros: list[Any] = [cliente_id]
+        if estado is not None:
+            sql += " AND estado = ?"
+            parametros.append(estado)
+        if lead_id is not None:
+            sql += " AND lead_id = ?"
+            parametros.append(lead_id)
+        sql += " ORDER BY fecha_creacion ASC"
+        return [
+            Escalamiento.model_validate_json(f["datos"]) for f in self._consultar(sql, parametros)
+        ]
+
+    # --- estrategias -------------------------------------------------------
+    def guardar_estrategia(self, estrategia: Estrategia) -> Estrategia:
+        _exigir_cliente(estrategia.cliente_id)
+        self._ejecutar(
+            "INSERT INTO estrategias (estrategia_id, cliente_id, nombre, etapa, version, estado, "
+            "datos) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(cliente_id, estrategia_id) DO UPDATE SET estado = excluded.estado, "
+            "datos = excluded.datos",
+            (
+                estrategia.estrategia_id,
+                estrategia.cliente_id,
+                estrategia.nombre,
+                estrategia.etapa.value,
+                estrategia.version,
+                estrategia.estado.value,
+                _volcar(estrategia),
+            ),
+        )
+        return estrategia
+
+    def obtener_estrategia(self, cliente_id: str, estrategia_id: str) -> Estrategia | None:
+        _exigir_cliente(cliente_id)
+        filas = self._consultar(
+            "SELECT datos FROM estrategias WHERE cliente_id = ? AND estrategia_id = ?",
+            (cliente_id, estrategia_id),
+        )
+        return Estrategia.model_validate_json(filas[0]["datos"]) if filas else None
+
+    def listar_estrategias(
+        self, cliente_id: str, etapa: Etapa | None = None, estado: str | None = None
+    ) -> list[Estrategia]:
+        _exigir_cliente(cliente_id)
+        sql = "SELECT datos FROM estrategias WHERE cliente_id = ?"
+        parametros: list[Any] = [cliente_id]
+        if etapa is not None:
+            sql += " AND etapa = ?"
+            parametros.append(etapa.value)
+        if estado is not None:
+            sql += " AND estado = ?"
+            parametros.append(estado)
+        sql += " ORDER BY nombre ASC, version ASC"
+        return [
+            Estrategia.model_validate_json(f["datos"]) for f in self._consultar(sql, parametros)
+        ]
+
+    # --- patrones ----------------------------------------------------------
+    def guardar_patron(self, patron: Patron) -> Patron:
+        _exigir_cliente(patron.cliente_id)
+        self._ejecutar(
+            "INSERT INTO patrones (patron_id, cliente_id, fecha, datos) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(cliente_id, patron_id) DO UPDATE SET datos = excluded.datos",
+            (
+                patron.patron_id,
+                patron.cliente_id,
+                patron.fecha_deteccion.isoformat(),
+                _volcar(patron),
+            ),
+        )
+        return patron
+
+    def listar_patrones(self, cliente_id: str) -> list[Patron]:
+        _exigir_cliente(cliente_id)
+        filas = self._consultar(
+            "SELECT datos FROM patrones WHERE cliente_id = ? ORDER BY fecha ASC", (cliente_id,)
+        )
+        return [Patron.model_validate_json(f["datos"]) for f in filas]
+
+    # --- resultados --------------------------------------------------------
+    def guardar_resultado(self, registro: RegistroResultado) -> RegistroResultado:
+        _exigir_cliente(registro.cliente_id)
+        self._ejecutar(
+            "INSERT INTO resultados (resultado_id, cliente_id, lead_id, fecha, datos) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(cliente_id, resultado_id) DO UPDATE SET "
+            "datos = excluded.datos",
+            (
+                registro.resultado_id,
+                registro.cliente_id,
+                registro.lead_id,
+                registro.fecha.isoformat(),
+                _volcar(registro),
+            ),
+        )
+        return registro
+
+    def listar_resultados(
+        self, cliente_id: str, lead_id: str | None = None
+    ) -> list[RegistroResultado]:
+        _exigir_cliente(cliente_id)
+        sql = "SELECT datos FROM resultados WHERE cliente_id = ?"
+        parametros: list[Any] = [cliente_id]
+        if lead_id is not None:
+            sql += " AND lead_id = ?"
+            parametros.append(lead_id)
+        sql += " ORDER BY fecha ASC"
+        return [
+            RegistroResultado.model_validate_json(f["datos"])
+            for f in self._consultar(sql, parametros)
+        ]
 
     # --- exportacion a hojas -------------------------------------------
     def exportar_hoja_leads(self, cliente_id: str) -> list[dict[str, Any]]:

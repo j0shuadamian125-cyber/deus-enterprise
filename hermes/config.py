@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from .channels import AdaptadorCorreo, AdaptadorLlamada, AdaptadorWhatsApp
 from .governance import Gobernanza
+from .learning import Aprendizaje
 from .llm import GeneradorRespuestas, MotorClaude
 from .nexus import ClienteNexus
 from .pipeline import Hermes
@@ -18,6 +19,8 @@ class Configuracion:
     anthropic_api_key: str | None = os.environ.get("ANTHROPIC_API_KEY")
     modelo: str = os.environ.get("HERMES_MODELO", "claude-sonnet-4-20250514")
     token_panel: str | None = os.environ.get("HERMES_PANEL_TOKEN")
+    token_webhook: str | None = os.environ.get("HERMES_WEBHOOK_TOKEN")
+    url_publica: str | None = os.environ.get("HERMES_URL_PUBLICA")
     envio_real: bool = os.environ.get("HERMES_ENVIO_REAL", "false").lower() == "true"
 
 
@@ -36,6 +39,10 @@ class Servicio:
     @property
     def gobernanza(self) -> Gobernanza:
         return self.hermes.gobernanza
+
+    @property
+    def aprendizaje(self) -> Aprendizaje:
+        return Aprendizaje(self.almacen, self.gobernanza)
 
 
 def construir_servicio(config: Configuracion | None = None) -> Servicio:

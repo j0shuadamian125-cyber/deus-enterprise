@@ -4,7 +4,12 @@ from __future__ import annotations
 import pytest
 
 from hermes.models import Canal, Estatus, Etapa
-from hermes.pipeline import ClienteNoRegistradoError, ContactoEntrante, Hermes
+from hermes.pipeline import (
+    CanalNoHabilitadoError,
+    ClienteNoRegistradoError,
+    ContactoEntrante,
+    Hermes,
+)
 from hermes.storage import AislamientoError, Almacen
 
 from .conftest import dar_de_alta
@@ -57,7 +62,7 @@ def test_lead_no_interesado_se_marca_perdido(hermes: Hermes, almacen: Almacen):
 
 def test_canal_deshabilitado_se_rechaza(hermes: Hermes, almacen: Almacen):
     dar_de_alta(almacen, cliente_id="cli_sin_correo", correo=False, llamadas=False)
-    with pytest.raises(ClienteNoRegistradoError):
+    with pytest.raises(CanalNoHabilitadoError):
         hermes.atender(entrante("cli_sin_correo", "hola", canal=Canal.CORREO, contacto="x@y.com"))
 
 

@@ -5,7 +5,7 @@ import pytest
 from hermes.channels import AdaptadorCorreo, AdaptadorLlamada, AdaptadorWhatsApp
 from hermes.config import Configuracion, Servicio
 from hermes.llm import GeneradorRespuestas
-from hermes.models import NivelServicioLlamada
+from hermes.models import NivelServicioLlamada, Plan
 from hermes.onboarding import RespuestasOnboarding, alta_cliente
 from hermes.pipeline import Hermes
 from hermes.storage import Almacen
@@ -29,9 +29,9 @@ def servicio(almacen: Almacen, hermes: Hermes) -> Servicio:
         config=Configuracion(ruta_base_datos=":memory:", token_panel="token-de-prueba"),
         almacen=almacen,
         hermes=hermes,
-        whatsapp=AdaptadorWhatsApp(),
+        whatsapp=AdaptadorWhatsApp(validar_firmas=False),
         correo=AdaptadorCorreo(),
-        llamada=AdaptadorLlamada(),
+        llamada=AdaptadorLlamada(validar_firmas=False),
         nexus=None,
     )
 
@@ -42,12 +42,18 @@ def dar_de_alta(
     correo: bool = True,
     llamadas: bool = True,
     grabacion: bool = False,
+    plan: Plan | None = None,
 ):
+    if plan is None:
+        plan = Plan.PILOTO if (correo or llamadas) else Plan.PLAN_1
     return alta_cliente(
         almacen,
         RespuestasOnboarding(
             cliente_id=cliente_id,
             nombre_negocio=f"Negocio {cliente_id}",
+            plan=plan,
+            productos=["Servicio de prueba"],
+            zona_horaria="America/Mexico_City",
             telefono_whatsapp="+521000000000",
             quiere_correo=correo,
             correo_conectado=f"ventas@{cliente_id}.com" if correo else None,

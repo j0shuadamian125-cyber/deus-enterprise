@@ -31,6 +31,9 @@ ACCIONES_NIVEL_1 = frozenset(
         "avanzar_etapa",
         "programar_seguimiento",
         "generar_guion_llamada_asistida",
+        "escalar_a_humano",
+        "intervencion_humana",
+        "registrar_resultado",
     }
 )
 
@@ -39,6 +42,9 @@ NIVELES_EXPLICITOS: dict[str, NivelDecision] = {
     "modificar_prompt": NivelDecision.APROBACION_PREVIA,
     "cambiar_plan_cliente": NivelDecision.APROBACION_PREVIA,
     "responder_fuera_de_guion": NivelDecision.APROBACION_PREVIA,
+    "activar_estrategia": NivelDecision.APROBACION_PREVIA,
+    "actualizar_configuracion_cliente": NivelDecision.APROBACION_PREVIA,
+    "cambio_de_estrategia": NivelDecision.CAMBIO_ESTRUCTURAL,
     "conectar_canal_nuevo": NivelDecision.CAMBIO_ESTRUCTURAL,
     "activar_grabacion_llamadas": NivelDecision.CAMBIO_ESTRUCTURAL,
     "eliminar_datos_cliente": NivelDecision.IRREVERSIBLE,

@@ -20,6 +20,23 @@ class Canal(str, Enum):
     LLAMADA = "llamada"
 
 
+class Plan(str, Enum):
+    """Un solo HERMES; el plan solo habilita capacidades."""
+
+    PLAN_1 = "plan_1"
+    PLAN_2 = "plan_2"
+    PLAN_3 = "plan_3"
+    PILOTO = "piloto"
+
+
+CANALES_POR_PLAN: dict[Plan, frozenset[Canal]] = {
+    Plan.PLAN_1: frozenset({Canal.WHATSAPP}),
+    Plan.PLAN_2: frozenset({Canal.WHATSAPP, Canal.CORREO}),
+    Plan.PLAN_3: frozenset({Canal.WHATSAPP, Canal.CORREO, Canal.LLAMADA}),
+    Plan.PILOTO: frozenset({Canal.WHATSAPP, Canal.CORREO, Canal.LLAMADA}),
+}
+
+
 class Etapa(str, Enum):
     APERTURA = "Apertura"
     PROSPECCION = "Prospeccion"
@@ -32,6 +49,46 @@ class Estatus(str, Enum):
     EN_PROCESO = "En_proceso"
     CERRADO = "Cerrado"
     PERDIDO = "Perdido"
+
+
+class Intencion(str, Enum):
+    SALUDO = "saludo"
+    INFORMACION = "informacion"
+    PRECIO = "precio"
+    DISPONIBILIDAD = "disponibilidad"
+    COMPRA = "compra"
+    OBJECION = "objecion"
+    QUEJA = "queja"
+    SOPORTE = "soporte"
+    PIDE_HUMANO = "pide_humano"
+    DESINTERES = "desinteres"
+    DESCONOCIDA = "desconocida"
+
+
+class MotivoEscalamiento(str, Enum):
+    SOLICITA_HUMANO = "solicita_humano"
+    BAJA_CONFIANZA = "baja_confianza"
+    INFORMACION_INSUFICIENTE = "informacion_insuficiente"
+    FUERA_DE_LIMITES = "fuera_de_limites"
+    LEGAL = "legal"
+    FINANCIERO_SENSIBLE = "financiero_sensible"
+    QUEJA_COMPLEJA = "queja_compleja"
+    REGLA_DEL_CLIENTE = "regla_del_cliente"
+    RIESGO_OPERATIVO = "riesgo_operativo"
+
+
+class EstadoEscalamiento(str, Enum):
+    PENDIENTE = "pendiente"
+    TOMADO = "tomado"
+    RESUELTO = "resuelto"
+    POSPUESTO = "pospuesto"
+    RECHAZADO = "rechazado"
+
+
+class EstadoEstrategia(str, Enum):
+    PROPUESTA = "propuesta"
+    ACTIVA = "activa"
+    RETIRADA = "retirada"
 
 
 class NivelServicioLlamada(str, Enum):
@@ -68,12 +125,47 @@ class CanalConfirmacion(str, Enum):
     NO_APLICA = "N-A"
 
 
+class EstadoEntrega(str, Enum):
+    PENDIENTE = "pendiente"
+    ENVIADA = "enviada"
+    FALLIDA = "fallida"
+
+
+class ReglasEscalamiento(BaseModel):
+    """Configurable por tenant (Seccion 17 de la directiva de finalizacion)."""
+
+    confianza_minima: float = 0.45
+    escalar_quejas: bool = True
+    escalar_solicitud_humano: bool = True
+    escalar_temas_legales: bool = True
+    escalar_descuentos: bool = True
+    palabras_clave_extra: list[str] = Field(default_factory=list)
+    descuento_maximo_por_ciento: float = 0.0
+
+
+class HorarioComercial(BaseModel):
+    """Horario por tenant; los dias van de 0 (lunes) a 6 (domingo)."""
+
+    dias: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])
+    hora_inicio: int = 9
+    hora_fin: int = 19
+
+
 class Cliente(BaseModel):
     """Tenant de HERMES. El plan y las preferencias vienen del onboarding (5.7)."""
 
     cliente_id: str
     nombre_negocio: str
-    plan: str = "basico"
+    plan: Plan = Plan.PLAN_1
+    representante: str | None = None
+    correo_representante: str | None = None
+    industria: str | None = None
+    descripcion_negocio: str | None = None
+    productos: list[str] = Field(default_factory=list)
+    objetivos: list[str] = Field(default_factory=list)
+    zona_horaria: str = "UTC"
+    horario_comercial: HorarioComercial = Field(default_factory=HorarioComercial)
+    reglas_escalamiento: ReglasEscalamiento = Field(default_factory=ReglasEscalamiento)
     correo_conectado: str | None = None
     telefono_whatsapp: str | None = None
     telefono_llamadas: str | None = None
@@ -83,6 +175,7 @@ class Cliente(BaseModel):
     grabacion_autorizada: bool = False
     jurisdiccion: str | None = None
     guion_aprobado: bool = True
+    sandbox: bool = False
     fecha_alta: datetime = Field(default_factory=ahora)
 
     @field_validator("cliente_id")
@@ -91,6 +184,15 @@ class Cliente(BaseModel):
         if not valor.strip():
             raise ValueError("cliente_id es obligatorio en todo registro de DEUS")
         return valor
+
+    @property
+    def canales_habilitados(self) -> frozenset[Canal]:
+        canales = set(CANALES_POR_PLAN[self.plan])
+        if Canal.CORREO in canales and not self.atencion_correo:
+            canales.discard(Canal.CORREO)
+        if Canal.LLAMADA in canales and not self.atencion_llamada:
+            canales.discard(Canal.LLAMADA)
+        return frozenset(canales)
 
 
 class Lead(BaseModel):
@@ -113,6 +215,15 @@ class Lead(BaseModel):
     notas_internas: str = ""
     nivel_decision: NivelDecision = NivelDecision.REVERSIBLE
     canal_preferido_lead: Canal | None = None
+    intencion: Intencion = Intencion.DESCONOCIDA
+    confianza: float = 0.0
+    urgencia: bool = False
+    objeciones: list[str] = Field(default_factory=list)
+    senales_compra: list[str] = Field(default_factory=list)
+    requiere_humano: bool = False
+    motivo_escalamiento: MotivoEscalamiento | None = None
+    objetivo_actual: str | None = None
+    estrategia_aplicada: str | None = None
 
 
 class Llamada(BaseModel):
@@ -128,6 +239,8 @@ class Llamada(BaseModel):
     transcripcion_texto: str = ""
     resultado: ResultadoLlamada = ResultadoLlamada.SIN_RESPUESTA
     etapa_resultante: Etapa = Etapa.APERTURA
+    proveedor: str | None = None
+    call_sid: str | None = None
 
 
 class Mensaje(BaseModel):
@@ -142,6 +255,9 @@ class Mensaje(BaseModel):
     fecha_hora: datetime = Field(default_factory=ahora)
     etapa: Etapa = Etapa.APERTURA
     decision_id: str | None = None
+    autor: str = "hermes"  # hermes / lead / humano
+    estado_entrega: EstadoEntrega = EstadoEntrega.PENDIENTE
+    error_entrega: str | None = None
 
 
 class Decision(BaseModel):
@@ -169,3 +285,75 @@ class MemoriaResumen(BaseModel):
     resumen_evento: str
     modulo_relacionado: str = "HERMES"
     decision_id_referencia: str | None = None
+
+
+class Escalamiento(BaseModel):
+    """Bandeja de intervencion humana."""
+
+    escalamiento_id: str
+    cliente_id: str
+    lead_id: str
+    canal: Canal
+    motivo: MotivoEscalamiento
+    contexto: str = ""
+    objetivo: str = ""
+    recomendacion: str = ""
+    respuesta_sugerida: str = ""
+    estado: EstadoEscalamiento = EstadoEscalamiento.PENDIENTE
+    atendido_por: str | None = None
+    accion: str | None = None
+    respuesta_final: str | None = None
+    resultado: str | None = None
+    decision_id: str | None = None
+    fecha_creacion: datetime = Field(default_factory=ahora)
+    fecha_resolucion: datetime | None = None
+    segundos_hasta_resultado: int | None = None
+
+
+class Estrategia(BaseModel):
+    """Estrategia comercial versionada y aprobada por tenant."""
+
+    estrategia_id: str
+    cliente_id: str
+    nombre: str
+    objetivo: str
+    etapa: Etapa
+    condiciones: list[str] = Field(default_factory=list)
+    plantilla: str = ""
+    version: int = 1
+    estado: EstadoEstrategia = EstadoEstrategia.PROPUESTA
+    evidencia: str = ""
+    resultados: dict = Field(default_factory=dict)
+    decision_id: str | None = None
+    fecha_creacion: datetime = Field(default_factory=ahora)
+    fecha_activacion: datetime | None = None
+
+
+class Patron(BaseModel):
+    """Patron observado en los resultados del tenant; nunca se aplica solo."""
+
+    patron_id: str
+    cliente_id: str
+    descripcion: str
+    evidencia: dict = Field(default_factory=dict)
+    muestras: int = 0
+    propuesta: str = ""
+    decision_id: str | None = None
+    fecha_deteccion: datetime = Field(default_factory=ahora)
+
+
+class RegistroResultado(BaseModel):
+    """Objetivo -> recomendacion -> accion -> resultado -> impacto."""
+
+    resultado_id: str
+    cliente_id: str
+    lead_id: str
+    objetivo: str
+    recomendacion: str = ""
+    accion: str = ""
+    resultado: str = ""
+    impacto: str = ""
+    estrategia_id: str | None = None
+    decision_id: str | None = None
+    segundos_hasta_resultado: int | None = None
+    fecha: datetime = Field(default_factory=ahora)

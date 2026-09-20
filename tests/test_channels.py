@@ -5,7 +5,7 @@ import pytest
 
 from hermes.channels import AdaptadorCorreo, AdaptadorLlamada, AdaptadorWhatsApp
 from hermes.llm import GeneradorRespuestas
-from hermes.models import Canal, Lead, NivelServicioLlamada, ResultadoLlamada
+from hermes.models import Canal, Cliente, Lead, NivelServicioLlamada, ResultadoLlamada
 from hermes.pipeline import Hermes
 from hermes.prompts import construir_prompt
 from hermes.storage import Almacen
@@ -165,7 +165,8 @@ def test_sin_credenciales_el_generador_usa_el_guion():
 
 
 def test_el_prompt_declara_el_canal_y_prohibe_inventar():
-    prompt = construir_prompt(_lead(), Canal.CORREO, "Negocio")
+    cliente = Cliente(cliente_id="cli_001", nombre_negocio="Negocio", productos=["Asesoria"])
+    prompt = construir_prompt(_lead(), Canal.CORREO, cliente)
     assert "Canal actual: correo" in prompt
     assert "Nunca inventas precios" in prompt
     assert "Nunca mencionas a DEUS" in prompt

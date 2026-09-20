@@ -23,6 +23,9 @@ def _alta(cliente_http: TestClient, cliente_id: str = "cli_001") -> dict:
         json={
             "cliente_id": cliente_id,
             "nombre_negocio": "Estudio Aurora",
+            "plan": "piloto",
+            "productos": ["Sesion fotografica"],
+            "zona_horaria": "America/Mexico_City",
             "telefono_whatsapp": "+521000000000",
             "quiere_correo": True,
             "correo_conectado": "ventas@aurora.com",
@@ -59,6 +62,7 @@ def test_grabacion_sin_jurisdiccion_es_rechazada(cliente_http: TestClient):
         json={
             "cliente_id": "cli_y",
             "nombre_negocio": "Y",
+            "plan": "plan_3",
             "quiere_llamadas": True,
             "nivel_servicio_llamada": "asistida",
             "telefono_llamadas": "+52100",
@@ -75,6 +79,7 @@ def test_onboarding_con_grabacion_advierte_del_requisito_legal(cliente_http: Tes
         json={
             "cliente_id": "cli_z",
             "nombre_negocio": "Z",
+            "plan": "plan_3",
             "quiere_llamadas": True,
             "nivel_servicio_llamada": "voz_ia",
             "telefono_llamadas": "+52100",
