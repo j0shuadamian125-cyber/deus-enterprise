@@ -22,6 +22,11 @@ class Configuracion:
     token_webhook: str | None = os.environ.get("HERMES_WEBHOOK_TOKEN")
     url_publica: str | None = os.environ.get("HERMES_URL_PUBLICA")
     envio_real: bool = os.environ.get("HERMES_ENVIO_REAL", "false").lower() == "true"
+    origenes_panel: tuple[str, ...] = tuple(
+        origen.strip()
+        for origen in os.environ.get("HERMES_ORIGENES_PANEL", "").split(",")
+        if origen.strip()
+    )
 
 
 @dataclass

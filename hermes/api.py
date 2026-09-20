@@ -14,11 +14,14 @@ Autenticacion:
 """
 from __future__ import annotations
 
-from typing import Any
+import json
+from collections.abc import Mapping
+from typing import Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .channels.whatsapp import FirmaInvalidaError
 from .config import Configuracion, Servicio, construir_servicio
@@ -34,7 +37,12 @@ from .models import (
     NivelServicioLlamada,
 )
 from .onboarding import RespuestasOnboarding, alta_cliente
-from .pipeline import CanalNoHabilitadoError, ClienteNoRegistradoError, ResultadoAtencion
+from .pipeline import (
+    CanalNoHabilitadoError,
+    ClienteNoRegistradoError,
+    ContactoEntrante,
+    ResultadoAtencion,
+)
 from .sandbox import ESCENARIOS, SandboxError, ejecutar_escenario, ejecutar_todos
 from .storage import AislamientoError
 from .strategies import EstrategiaError
@@ -81,7 +89,7 @@ class EstrategiaPeticion(BaseModel):
     objetivo: str
     etapa: Etapa
     plantilla: str
-    condiciones: list[str] = []
+    condiciones: list[str] = Field(default_factory=list)
     evidencia: str = ""
 
 
@@ -126,6 +134,13 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         description="Modulo de ventas y atencion multicanal de DEUS",
     )
     app.state.servicio = servicio
+    if servicio.config.origenes_panel:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(servicio.config.origenes_panel),
+            allow_methods=["GET", "POST"],
+            allow_headers=["X-Panel-Token", "Content-Type"],
+        )
 
     def autorizar(x_panel_token: str | None = Header(default=None)) -> None:
         esperado = servicio.config.token_panel
@@ -572,7 +587,11 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
     return app
 
 
-async def _carga(peticion: Request) -> dict[str, Any]:
+class AdaptadorEntrante(Protocol):
+    def normalizar(self, cliente_id: str, carga: Mapping[str, str]) -> ContactoEntrante: ...
+
+
+async def _carga(peticion: Request) -> dict[str, str]:
     """Acepta JSON o formulario (Twilio envia form-urlencoded)."""
     tipo = peticion.headers.get("content-type", "")
     try:
@@ -589,7 +608,9 @@ async def _carga(peticion: Request) -> dict[str, Any]:
     return {clave: str(valor) for clave, valor in formulario.items()}
 
 
-def _normalizar(adaptador: Any, cliente_id: str, carga: dict[str, Any]) -> Any:
+def _normalizar(
+    adaptador: AdaptadorEntrante, cliente_id: str, carga: Mapping[str, str]
+) -> ContactoEntrante:
     try:
         return adaptador.normalizar(cliente_id, carga)
     except ValueError as exc:
@@ -628,9 +649,7 @@ def _marcar_evento(
         )
 
 
-def _json(texto: str) -> Any:
-    import json
-
+def _json(texto: str) -> object:
     try:
         return json.loads(texto)
     except ValueError:

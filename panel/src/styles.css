@@ -1,0 +1,247 @@
+:root {
+  --fondo: #060a0e;
+  --panel: #0d141b;
+  --borde: #1d2a35;
+  --texto: #dbe6ee;
+  --tenue: #7b8b98;
+  --acento: #00ffc8;
+  --alerta: #ff9800;
+  --error: #ff5252;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+button {
+  background: transparent;
+  border: 1px solid var(--borde);
+  color: var(--texto);
+  padding: 7px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--acento);
+  color: var(--acento);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+button.principal {
+  background: var(--acento);
+  border-color: var(--acento);
+  color: #04120e;
+  font-weight: 600;
+}
+
+input,
+select,
+textarea {
+  background: #060c11;
+  border: 1px solid var(--borde);
+  color: var(--texto);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  width: 100%;
+}
+
+.acceso {
+  max-width: 380px;
+  margin: 15vh auto;
+  padding: 28px;
+  background: var(--panel);
+  border: 1px solid var(--borde);
+  border-radius: 12px;
+}
+
+.marca {
+  letter-spacing: 6px;
+  color: var(--acento);
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.disposicion {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  min-height: 100vh;
+}
+
+.lateral {
+  border-right: 1px solid var(--borde);
+  padding: 18px 14px;
+  background: var(--panel);
+}
+
+.lateral nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 18px;
+}
+
+.lateral nav button {
+  text-align: left;
+  border-color: transparent;
+}
+
+.lateral nav button.activa {
+  border-color: var(--acento);
+  color: var(--acento);
+}
+
+.contenido {
+  padding: 22px 26px;
+  overflow: auto;
+}
+
+.tarjetas {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.tarjeta {
+  background: var(--panel);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.tarjeta .valor {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--acento);
+}
+
+.tarjeta .rotulo {
+  color: var(--tenue);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--borde);
+  font-size: 13px;
+}
+
+th {
+  color: var(--tenue);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+.fila {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.etiqueta {
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  border: 1px solid var(--borde);
+}
+
+.pendiente {
+  color: var(--alerta);
+  border-color: var(--alerta);
+}
+
+.ok {
+  color: var(--acento);
+  border-color: var(--acento);
+}
+
+.mal {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.aviso {
+  border: 1px solid var(--error);
+  color: var(--error);
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin-bottom: 14px;
+}
+
+.conversacion {
+  background: #060c11;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  padding: 12px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.conversacion p {
+  margin: 0 0 8px;
+}
+
+.conversacion .saliente {
+  color: var(--acento);
+}
+
+.columnas {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+h2 {
+  margin: 0 0 14px;
+  font-size: 18px;
+}
+
+h3 {
+  margin: 18px 0 8px;
+  font-size: 14px;
+  color: var(--tenue);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.tenue {
+  color: var(--tenue);
+}
