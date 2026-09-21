@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { api } from "./api.js";
+import { api, descargarReportePdf } from "./api.js";
 
 export function Estado({ estado }) {
   if (!estado) return <p className="tenue">Cargando estado…</p>;
@@ -609,7 +609,12 @@ export function Reporte({ clienteId, alError }) {
   );
   return (
     <>
-      <h2>Reporte</h2>
+      <div className="fila">
+        <h2>Reporte</h2>
+        <button className="principal" onClick={() => descargarReportePdf(clienteId).catch(alError)}>
+          Descargar PDF
+        </button>
+      </div>
       <p className="tenue">
         Datos reales del CRM de este cliente. No hay estimaciones: lo que no se ha medido
         aparece en cero.

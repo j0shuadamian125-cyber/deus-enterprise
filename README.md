@@ -41,11 +41,17 @@ uvicorn hermes.main:app --reload
 | --- | --- |
 | `HERMES_DB` | Ruta del archivo SQLite (por defecto `hermes.db`) |
 | `HERMES_PANEL_TOKEN` | Token del panel interno; sin el, los endpoints de panel quedan abiertos |
+| `HERMES_WEBHOOK_TOKEN` | Token de los webhooks de correo y voz (`X-Webhook-Token`) |
+| `HERMES_URL_PUBLICA` | URL publica exacta del webhook; Twilio firma sobre ella |
+| `HERMES_ORIGENES_PANEL` | Origenes permitidos por CORS, separados por coma (nunca `*`) |
 | `HERMES_ENVIO_REAL` | `true` para entregar los mensajes por Twilio/SMTP en vez de solo registrarlos |
 | `ANTHROPIC_API_KEY` | Habilita Claude; sin ella HERMES usa el guion aprobado |
 | `HERMES_MODELO` | Modelo de Anthropic a usar |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` | Envio por WhatsApp |
+| `TWILIO_VALIDAR_FIRMA` | `false` solo para pruebas locales; en produccion se valida la firma |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Envio por correo |
+| `IMAP_HOST`, `IMAP_PORT`, `IMAP_BUZON` | Recepcion de correo por IMAP (worker) |
+| `TWILIO_VOICE_FROM`, `TWILIO_VOICE_TWIML_URL` | Llamadas salientes de voz |
 | `NEXUS_URL`, `NEXUS_INTERNAL_API_TOKEN` | Registro del modulo y reporte de errores a NEXUS |
 
 Ninguna credencial se guarda en el repositorio.
@@ -67,6 +73,14 @@ Ninguna credencial se guarda en el repositorio.
 | `POST /v1/clientes/{cliente_id}/leads/{lead_id}/guion-llamada` | Guion para llamada asistida |
 | `GET /v1/clientes/{cliente_id}/llamadas` | Llamadas y transcripciones |
 | `GET /v1/clientes/{cliente_id}/reporte` | Conteos por etapa, canal y pendientes |
+| `GET /v1/clientes/{cliente_id}/reporte.pdf` | Reporte ejecutivo descargable |
+| `GET /v1/clientes/{cliente_id}/resultados` | Objetivo -> accion -> resultado -> impacto |
+| `GET /v1/clientes/{cliente_id}/escalamientos` | Bandeja de intervencion humana |
+| `POST /v1/clientes/{cliente_id}/escalamientos/{id}/intervenir` | Aprobar, editar o tomar la conversacion |
+| `GET/POST /v1/clientes/{cliente_id}/estrategias` | Estrategias versionadas del tenant |
+| `GET /v1/clientes/{cliente_id}/patrones`, `POST .../patrones/detectar` | Patrones del tenant y propuesta de cambio |
+| `GET /v1/sandbox/escenarios`, `POST /v1/clientes/{cliente_id}/sandbox[/todos]` | Laboratorio de pruebas |
+| `GET /v1/estado` | Que integraciones estan realmente configuradas |
 | `GET /v1/decisiones` | Bitacora, filtrable por cliente y estado |
 | `POST /v1/decisiones/{id}/aprobar` | Aprobar (Nivel 4 exige segunda confirmacion) |
 | `POST /v1/decisiones/{id}/rechazar` | Rechazar |
@@ -92,6 +106,59 @@ Hay dos modalidades: `voz_ia` (la IA habla) y `asistida` (la IA prepara el guion
 y una persona llama). La transcripcion siempre queda asociada al `lead_id`. La
 URL de grabacion **se descarta** si el cliente no la autorizo, y el onboarding
 exige registrar la jurisdiccion antes de autorizarla.
+
+## Panel de operacion
+
+El panel es una app React (Vite) en `panel/`. Se autentica con el mismo
+`X-Panel-Token`, que guarda solo en `sessionStorage`; **ninguna credencial de
+proveedor llega al navegador** y el panel nunca llama a un LLM directamente.
+
+```bash
+cd panel
+npm install
+npm run dev     # proxy a http://127.0.0.1:8000, o define VITE_HERMES_API
+npm run build   # artefacto estatico en panel/dist
+```
+
+Vistas: pipeline y conversaciones, bandeja de intervencion humana, estrategias y
+patrones, gobernanza, sandbox, reporte (con descarga en PDF) y estado de
+integraciones. Lo que el backend no entrega se muestra vacio: el panel no
+inventa datos.
+
+## Procesos de fondo
+
+```bash
+python -m hermes.cli correo cli_001 --segundos 60   # sondeo IMAP -> pipeline -> SMTP
+python -m hermes.cli seguimientos cli_001 --horas 48 # reactiva leads en silencio
+```
+
+El worker de correo reusa la idempotencia por `Message-ID` y el registro de
+entrega de los webhooks. El de seguimiento respeta el horario comercial del
+tenant y el limite de 3 seguimientos.
+
+## Estado de las integraciones
+
+| Pieza | Estado |
+| --- | --- |
+| Nucleo, pipeline, gobernanza, estrategias, aprendizaje, sandbox, multi-tenant | Implementado y probado |
+| Panel conectado al backend, intervencion humana, reporte PDF | Implementado y probado |
+| Claude (LLM real) | Implementado — requiere configuracion externa (`ANTHROPIC_API_KEY`) |
+| WhatsApp por Twilio (webhook firmado + envio) | Implementado — requiere configuracion externa |
+| Correo SMTP/IMAP | Implementado — requiere configuracion externa |
+| Voz por Twilio (llamada + transcripcion por webhook) | Implementado — requiere configuracion externa (numero de voz y TwiML) |
+| Colas distribuidas y despliegue multi-proceso | No implementado: hoy SQLite y workers por proceso |
+
+Sin esas credenciales HERMES sigue operando: registra la conversacion, responde
+con el guion aprobado y marca la respuesta como no entregada. `GET /v1/estado`
+y la vista *Integraciones* del panel dicen en todo momento que hay configurado.
+
+## Limitaciones conocidas
+
+- El almacenamiento es SQLite: sirve para el piloto, no para varios procesos
+  escribiendo en paralelo.
+- No se ha medido la escala; no se afirma ninguna cifra de concurrencia.
+- El reporte PDF no incluye graficos todavia: solo tablas y conclusion.
+- La voz depende de que el proveedor entregue la transcripcion al webhook.
 
 ## Pruebas
 

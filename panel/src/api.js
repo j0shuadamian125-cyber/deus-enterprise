@@ -38,6 +38,21 @@ async function peticion(ruta, { metodo = "GET", cuerpo } = {}) {
   return datos;
 }
 
+export async function descargarReportePdf(clienteId) {
+  const respuesta = await fetch(`${BASE}/v1/clientes/${clienteId}/reporte.pdf`, {
+    headers: { "X-Panel-Token": leerToken() },
+  });
+  if (!respuesta.ok) {
+    throw new ErrorApi(respuesta.status, respuesta.statusText);
+  }
+  const url = URL.createObjectURL(await respuesta.blob());
+  const enlace = document.createElement("a");
+  enlace.href = url;
+  enlace.download = `hermes-${clienteId}.pdf`;
+  enlace.click();
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   estado: () => peticion("/v1/estado"),
   clientes: () => peticion("/v1/clientes"),

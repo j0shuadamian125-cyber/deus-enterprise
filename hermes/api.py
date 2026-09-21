@@ -20,7 +20,7 @@ from typing import Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .channels.whatsapp import FirmaInvalidaError
@@ -43,6 +43,7 @@ from .pipeline import (
     ContactoEntrante,
     ResultadoAtencion,
 )
+from .reportes import generar_reporte_pdf
 from .sandbox import ESCENARIOS, SandboxError, ejecutar_escenario, ejecutar_todos
 from .storage import AislamientoError
 from .strategies import EstrategiaError
@@ -375,6 +376,22 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
     @app.get("/v1/clientes/{cliente_id}/reporte", dependencies=[Depends(autorizar)])
     def reporte(cliente_id: str) -> dict:
         return servicio.hermes.reporte(cliente_id)
+
+    @app.get("/v1/clientes/{cliente_id}/reporte.pdf", dependencies=[Depends(autorizar)])
+    def reporte_pdf(cliente_id: str) -> Response:
+        cliente = servicio.almacen.obtener_cliente(cliente_id)
+        if cliente is None:
+            raise HTTPException(status_code=404, detail="Cliente no registrado")
+        pdf = generar_reporte_pdf(
+            servicio.almacen, cliente, servicio.hermes.reporte(cliente_id)
+        )
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="hermes-{cliente_id}.pdf"',
+            },
+        )
 
     @app.get("/v1/clientes/{cliente_id}/resultados", dependencies=[Depends(autorizar)])
     def resultados(cliente_id: str, lead_id: str | None = None) -> list[dict]:
