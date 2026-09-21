@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 
 import { api, descargarReportePdf } from "./api.js";
 
+// Valores exactos del enum Etapa del backend.
+const ETAPAS = ["Apertura", "Prospeccion", "Cierre", "Seguimiento"];
+
 export function Estado({ estado }) {
   if (!estado) return <p className="tenue">Cargando estado…</p>;
   const filas = [
@@ -53,17 +56,18 @@ export function Pipeline({ clienteId, alError }) {
 
   const cargar = () => api.leads(clienteId).then(setLeads).catch(alError);
   useEffect(() => {
+    setLeads([]);
+    setDetalle(null);
     if (clienteId) cargar();
   }, [clienteId]);
 
   const abrir = (leadId) => api.lead(clienteId, leadId).then(setDetalle).catch(alError);
 
-  const etapas = ["apertura", "prospeccion", "cierre", "seguimiento"];
   return (
     <>
       <h2>Pipeline</h2>
       <div className="tarjetas">
-        {etapas.map((etapa) => (
+        {ETAPAS.map((etapa) => (
           <div className="tarjeta" key={etapa}>
             <div className="valor">{leads.filter((l) => l.etapa === etapa).length}</div>
             <div className="rotulo">{etapa}</div>
@@ -157,6 +161,9 @@ export function Bandeja({ clienteId, alError }) {
   const cargar = () =>
     api.escalamientos(clienteId, "pendiente").then(setPendientes).catch(alError);
   useEffect(() => {
+    setPendientes([]);
+    setCaso(null);
+    setTexto("");
     if (clienteId) cargar();
   }, [clienteId]);
 
@@ -243,12 +250,17 @@ export function Bandeja({ clienteId, alError }) {
               />
               <button
                 className="principal"
-                disabled={!operador}
+                disabled={!operador || !(caso.escalamiento.respuesta_sugerida || "").trim()}
+                title={
+                  (caso.escalamiento.respuesta_sugerida || "").trim()
+                    ? ""
+                    : "HERMES no dejó respuesta sugerida: escriba una y use Enviar editada"
+                }
                 onClick={() => intervenir("aprobar")}
               >
                 Aprobar sugerida
               </button>
-              <button disabled={!operador} onClick={() => intervenir("editar")}>
+              <button disabled={!operador || !texto.trim()} onClick={() => intervenir("editar")}>
                 Enviar editada
               </button>
               <button disabled={!operador} onClick={() => intervenir("tomar")}>
@@ -269,7 +281,7 @@ export function Estrategias({ clienteId, alError }) {
   const [borrador, setBorrador] = useState({
     nombre: "",
     objetivo: "",
-    etapa: "apertura",
+    etapa: ETAPAS[0],
     plantilla: "",
     evidencia: "",
   });
@@ -277,9 +289,13 @@ export function Estrategias({ clienteId, alError }) {
   const cargar = () => {
     api.estrategias(clienteId).then(setEstrategias).catch(alError);
     api.patrones(clienteId).then(setPatrones).catch(alError);
-    api.decisiones(clienteId, "pendiente").then(setDecisiones).catch(alError);
+    // Sin filtro de estado: la decision que habilita Activar ya no esta pendiente.
+    api.decisiones(clienteId).then(setDecisiones).catch(alError);
   };
   useEffect(() => {
+    setEstrategias([]);
+    setPatrones([]);
+    setDecisiones([]);
     if (clienteId) cargar();
   }, [clienteId]);
 
@@ -319,7 +335,7 @@ export function Estrategias({ clienteId, alError }) {
                   </span>
                 </td>
                 <td>
-                  {estrategia.usos} / {estrategia.exitos}
+                  {estrategia.medicion?.usos ?? 0} / {estrategia.medicion?.exitos ?? 0}
                 </td>
                 <td>
                   {estrategia.estado !== "activa" && (
@@ -377,7 +393,7 @@ export function Estrategias({ clienteId, alError }) {
           onChange={(e) => setBorrador({ ...borrador, etapa: e.target.value })}
           style={{ maxWidth: 160 }}
         >
-          {["apertura", "prospeccion", "cierre", "seguimiento"].map((etapa) => (
+          {ETAPAS.map((etapa) => (
             <option key={etapa} value={etapa}>
               {etapa}
             </option>
@@ -465,6 +481,7 @@ export function Decisiones({ clienteId, alError }) {
 
   const cargar = () => api.decisiones(clienteId, "pendiente").then(setDecisiones).catch(alError);
   useEffect(() => {
+    setDecisiones([]);
     if (clienteId) cargar();
   }, [clienteId]);
 
@@ -492,7 +509,7 @@ export function Decisiones({ clienteId, alError }) {
           {decisiones.map((decision) => (
             <tr key={decision.decision_id}>
               <td>{decision.nivel}</td>
-              <td>{decision.accion}</td>
+              <td>{decision.payload?.accion}</td>
               <td>{decision.descripcion}</td>
               <td>
                 <button
@@ -533,6 +550,23 @@ export function Laboratorio({ clienteId, cliente, alError }) {
     api.escenarios().then(setEscenarios).catch(alError);
   }, []);
 
+  useEffect(() => {
+    setResultados([]);
+  }, [clienteId]);
+
+  const claveDe = (fila) => fila.clave || fila.escenario;
+
+  const ejecutarUno = (clave) =>
+    api
+      .sandbox(clienteId, clave)
+      .then((resultado) =>
+        setResultados((previos) => [
+          resultado,
+          ...previos.filter((fila) => claveDe(fila) !== claveDe(resultado)),
+        ]),
+      )
+      .catch(alError);
+
   if (cliente && !cliente.sandbox) {
     return (
       <>
@@ -566,12 +600,18 @@ export function Laboratorio({ clienteId, cliente, alError }) {
             <th>Descripción</th>
             <th>Escaló</th>
             <th>Esperado</th>
+            <th />
           </tr>
         </thead>
         <tbody>
-          {(resultados.length ? resultados : escenarios).map((fila) => (
-            <tr key={fila.clave || fila.escenario}>
-              <td>{fila.clave || fila.escenario}</td>
+          {escenarios.map((escenario) => {
+            const ejecutado = resultados.find(
+              (fila) => claveDe(fila) === claveDe(escenario),
+            );
+            const fila = ejecutado || escenario;
+            return (
+            <tr key={claveDe(escenario)}>
+              <td>{claveDe(escenario)}</td>
               <td className="tenue">{fila.descripcion}</td>
               <td>{"escalo" in fila ? String(fila.escalo) : "—"}</td>
               <td>
@@ -583,8 +623,12 @@ export function Laboratorio({ clienteId, cliente, alError }) {
                   "—"
                 )}
               </td>
+              <td>
+                <button onClick={() => ejecutarUno(claveDe(escenario))}>Ejecutar</button>
+              </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </>
@@ -596,6 +640,8 @@ export function Reporte({ clienteId, alError }) {
   const [resultados, setResultados] = useState([]);
 
   useEffect(() => {
+    setReporte(null);
+    setResultados([]);
     if (!clienteId) return;
     api.reporte(clienteId).then(setReporte).catch(alError);
     api.resultados(clienteId).then(setResultados).catch(alError);

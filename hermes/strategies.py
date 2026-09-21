@@ -100,6 +100,18 @@ class Estrategias:
         estrategia.fecha_activacion = ahora()
         return self.almacen.guardar_estrategia(estrategia)
 
+    def medir(self, cliente_id: str) -> dict[str, dict[str, int]]:
+        """Usos y cierres ganados por estrategia, contados sobre resultados reales."""
+        medicion: dict[str, dict[str, int]] = {}
+        for registro in self.almacen.listar_resultados(cliente_id):
+            if not registro.estrategia_id:
+                continue
+            conteo = medicion.setdefault(registro.estrategia_id, {"usos": 0, "exitos": 0})
+            conteo["usos"] += 1
+            if registro.resultado == "ganado":
+                conteo["exitos"] += 1
+        return medicion
+
     def activa_para(
         self, cliente_id: str, etapa: Etapa, texto_lead: str = ""
     ) -> Estrategia | None:

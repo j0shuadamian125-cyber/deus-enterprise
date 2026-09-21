@@ -364,6 +364,10 @@ class Hermes:
 
         texto: str | None = None
         if accion == "aprobar":
+            if not (escalamiento.respuesta_sugerida or "").strip():
+                raise ValueError(
+                    "No hay respuesta sugerida que aprobar: edite la respuesta antes de enviarla"
+                )
             texto = escalamiento.respuesta_sugerida
         elif accion == "editar":
             if not respuesta:

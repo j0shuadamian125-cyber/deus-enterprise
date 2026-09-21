@@ -62,6 +62,8 @@ export default function App() {
   const [estado, setEstado] = useState(null);
   const [vista, setVista] = useState("pipeline");
   const [error, setError] = useState("");
+  const [clientesCargados, setClientesCargados] = useState(false);
+  const [intento, setIntento] = useState(0);
 
   const alError = (exc) => setError(exc.message || String(exc));
 
@@ -71,11 +73,15 @@ export default function App() {
       .clientes()
       .then((lista) => {
         setClientes(lista);
+        setClientesCargados(true);
         setClienteId((actual) => actual || lista[0]?.cliente_id || "");
       })
-      .catch(alError);
+      .catch((exc) => {
+        setClientesCargados(false);
+        alError(exc);
+      });
     api.estado().then(setEstado).catch(alError);
-  }, [autenticado]);
+  }, [autenticado, intento]);
 
   if (!autenticado) return <Acceso alEntrar={() => setAutenticado(true)} />;
 
@@ -92,7 +98,11 @@ export default function App() {
               {c.nombre_negocio}
             </option>
           ))}
-          {clientes.length === 0 && <option value="">Sin clientes dados de alta</option>}
+          {clientes.length === 0 && (
+            <option value="">
+              {clientesCargados ? "Sin clientes dados de alta" : "Sin conexión con la API"}
+            </option>
+          )}
         </select>
         <nav>
           {VISTAS.map(([clave, rotulo]) => (
@@ -121,17 +131,25 @@ export default function App() {
       <main className="contenido">
         {error && <div className="aviso">{error}</div>}
         {!clienteId && vista !== "estado" ? (
-          <p className="tenue">
-            No hay clientes dados de alta. Usa POST /v1/onboarding para registrar el primero.
-          </p>
+          clientesCargados ? (
+            <p className="tenue">
+              No hay clientes dados de alta. Usa POST /v1/onboarding para registrar el primero.
+            </p>
+          ) : (
+            <p className="tenue">
+              No se pudo cargar la lista de clientes: la API no respondió. No se muestra nada
+              porque el estado real del sistema es desconocido.{" "}
+              <button onClick={() => setIntento((n) => n + 1)}>Reintentar</button>
+            </p>
+          )
         ) : (
           <>
-            {vista === "pipeline" && <Pipeline {...propiedades} />}
-            {vista === "bandeja" && <Bandeja {...propiedades} />}
-            {vista === "estrategias" && <Estrategias {...propiedades} />}
-            {vista === "decisiones" && <Decisiones {...propiedades} />}
-            {vista === "sandbox" && <Laboratorio {...propiedades} />}
-            {vista === "reporte" && <Reporte {...propiedades} />}
+            {vista === "pipeline" && <Pipeline key={clienteId} {...propiedades} />}
+            {vista === "bandeja" && <Bandeja key={clienteId} {...propiedades} />}
+            {vista === "estrategias" && <Estrategias key={clienteId} {...propiedades} />}
+            {vista === "decisiones" && <Decisiones key={clienteId} {...propiedades} />}
+            {vista === "sandbox" && <Laboratorio key={clienteId} {...propiedades} />}
+            {vista === "reporte" && <Reporte key={clienteId} {...propiedades} />}
           </>
         )}
         {vista === "estado" && <Estado estado={estado} />}

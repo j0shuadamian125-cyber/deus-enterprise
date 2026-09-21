@@ -154,6 +154,11 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         if esperado and x_webhook_token != esperado:
             raise HTTPException(status_code=401, detail="Token de webhook invalido")
 
+    def exigir_cliente(cliente_id: str) -> None:
+        """404 explicito: un tenant inexistente no debe verse como uno vacio."""
+        if servicio.almacen.obtener_cliente(cliente_id) is None:
+            raise HTTPException(status_code=404, detail="Cliente inexistente")
+
     @app.exception_handler(ClienteNoRegistradoError)
     async def _cliente_no_registrado(_: Request, exc: ClienteNoRegistradoError) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": str(exc)})
@@ -298,7 +303,10 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         return cuerpo
 
     # --- CRM -------------------------------------------------------------
-    @app.get("/v1/clientes/{cliente_id}/leads", dependencies=[Depends(autorizar)])
+    @app.get(
+        "/v1/clientes/{cliente_id}/leads",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def leads(
         cliente_id: str,
         etapa: Etapa | None = None,
@@ -310,7 +318,10 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             for lead in servicio.almacen.listar_leads(cliente_id, etapa, estatus, canal_origen)
         ]
 
-    @app.get("/v1/clientes/{cliente_id}/leads/{lead_id}", dependencies=[Depends(autorizar)])
+    @app.get(
+        "/v1/clientes/{cliente_id}/leads/{lead_id}",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def lead(cliente_id: str, lead_id: str) -> dict:
         registro = servicio.almacen.obtener_lead(cliente_id, lead_id)
         if registro is None:
@@ -321,7 +332,10 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             "historial": [m.model_dump(mode="json") for m in historial],
         }
 
-    @app.get("/v1/clientes/{cliente_id}/hoja-leads", dependencies=[Depends(autorizar)])
+    @app.get(
+        "/v1/clientes/{cliente_id}/hoja-leads",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def hoja_leads(cliente_id: str) -> list[dict]:
         """Exporta el CRM con las columnas de la hoja Leads_[cliente_id]."""
         return servicio.almacen.exportar_hoja_leads(cliente_id)
@@ -329,7 +343,7 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
     @app.post(
         "/v1/clientes/{cliente_id}/leads/{lead_id}/seguimiento",
         response_model=RespuestaAtencion,
-        dependencies=[Depends(autorizar)],
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
     )
     def seguimiento(cliente_id: str, lead_id: str) -> RespuestaAtencion:
         try:
@@ -342,7 +356,7 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
 
     @app.post(
         "/v1/clientes/{cliente_id}/leads/{lead_id}/cierre",
-        dependencies=[Depends(autorizar)],
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
     )
     def cierre(cliente_id: str, lead_id: str, resultado: str = "ganado") -> dict:
         try:
@@ -353,7 +367,7 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
 
     @app.post(
         "/v1/clientes/{cliente_id}/leads/{lead_id}/guion-llamada",
-        dependencies=[Depends(autorizar)],
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
     )
     def guion_llamada(cliente_id: str, lead_id: str) -> dict:
         try:
@@ -366,18 +380,27 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             "guion": guion,
         }
 
-    @app.get("/v1/clientes/{cliente_id}/llamadas", dependencies=[Depends(autorizar)])
+    @app.get(
+        "/v1/clientes/{cliente_id}/llamadas",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def llamadas(cliente_id: str, lead_id: str | None = None) -> list[dict]:
         return [
             llamada.model_dump(mode="json")
             for llamada in servicio.almacen.listar_llamadas(cliente_id, lead_id)
         ]
 
-    @app.get("/v1/clientes/{cliente_id}/reporte", dependencies=[Depends(autorizar)])
+    @app.get(
+        "/v1/clientes/{cliente_id}/reporte",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def reporte(cliente_id: str) -> dict:
         return servicio.hermes.reporte(cliente_id)
 
-    @app.get("/v1/clientes/{cliente_id}/reporte.pdf", dependencies=[Depends(autorizar)])
+    @app.get(
+        "/v1/clientes/{cliente_id}/reporte.pdf",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def reporte_pdf(cliente_id: str) -> Response:
         cliente = servicio.almacen.obtener_cliente(cliente_id)
         if cliente is None:
@@ -393,7 +416,10 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             },
         )
 
-    @app.get("/v1/clientes/{cliente_id}/resultados", dependencies=[Depends(autorizar)])
+    @app.get(
+        "/v1/clientes/{cliente_id}/resultados",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def resultados(cliente_id: str, lead_id: str | None = None) -> list[dict]:
         return [
             registro.model_dump(mode="json")
@@ -401,7 +427,10 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         ]
 
     # --- intervencion humana ------------------------------------------------
-    @app.get("/v1/clientes/{cliente_id}/escalamientos", dependencies=[Depends(autorizar)])
+    @app.get(
+        "/v1/clientes/{cliente_id}/escalamientos",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def escalamientos(
         cliente_id: str, estado: str | None = None, lead_id: str | None = None
     ) -> list[dict]:
@@ -412,7 +441,7 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
 
     @app.get(
         "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}",
-        dependencies=[Depends(autorizar)],
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
     )
     def escalamiento(cliente_id: str, escalamiento_id: str) -> dict:
         registro = servicio.almacen.obtener_escalamiento(cliente_id, escalamiento_id)
@@ -428,7 +457,7 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
 
     @app.post(
         "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}/intervenir",
-        dependencies=[Depends(autorizar)],
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
     )
     def intervenir(cliente_id: str, escalamiento_id: str, peticion: IntervencionPeticion) -> dict:
         try:
@@ -447,16 +476,25 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         return {"escalamiento": registro.model_dump(mode="json"), "respuesta_enviada": texto}
 
     # --- estrategias ---------------------------------------------------------
-    @app.get("/v1/clientes/{cliente_id}/estrategias", dependencies=[Depends(autorizar)])
+    @app.get(
+        "/v1/clientes/{cliente_id}/estrategias",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def estrategias(
         cliente_id: str, etapa: Etapa | None = None, estado: str | None = None
     ) -> list[dict]:
-        return [
-            estrategia.model_dump(mode="json")
-            for estrategia in servicio.almacen.listar_estrategias(cliente_id, etapa, estado)
-        ]
+        medicion = servicio.hermes.estrategias.medir(cliente_id)
+        salida = []
+        for estrategia in servicio.almacen.listar_estrategias(cliente_id, etapa, estado):
+            datos = estrategia.model_dump(mode="json")
+            datos["medicion"] = medicion.get(estrategia.estrategia_id, {"usos": 0, "exitos": 0})
+            salida.append(datos)
+        return salida
 
-    @app.post("/v1/clientes/{cliente_id}/estrategias", dependencies=[Depends(autorizar)])
+    @app.post(
+        "/v1/clientes/{cliente_id}/estrategias",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def crear_estrategia(cliente_id: str, peticion: EstrategiaPeticion) -> dict:
         estrategia = servicio.hermes.estrategias.crear(
             cliente_id=cliente_id,
@@ -483,7 +521,7 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
 
     @app.post(
         "/v1/clientes/{cliente_id}/estrategias/{estrategia_id}/activar",
-        dependencies=[Depends(autorizar)],
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
     )
     def activar_estrategia(
         cliente_id: str, estrategia_id: str, peticion: ActivacionPeticion
@@ -505,18 +543,24 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         return estrategia.model_dump(mode="json")
 
     # --- aprendizaje ----------------------------------------------------------
-    @app.get("/v1/clientes/{cliente_id}/patrones", dependencies=[Depends(autorizar)])
+    @app.get(
+        "/v1/clientes/{cliente_id}/patrones",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def patrones(cliente_id: str) -> list[dict]:
         return [p.model_dump(mode="json") for p in servicio.almacen.listar_patrones(cliente_id)]
 
-    @app.post("/v1/clientes/{cliente_id}/patrones/detectar", dependencies=[Depends(autorizar)])
+    @app.post(
+        "/v1/clientes/{cliente_id}/patrones/detectar",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def detectar_patrones(cliente_id: str) -> list[dict]:
         aprendizaje: Aprendizaje = servicio.aprendizaje
         return [p.model_dump(mode="json") for p in aprendizaje.detectar_patrones(cliente_id)]
 
     @app.post(
         "/v1/clientes/{cliente_id}/patrones/{patron_id}/proponer",
-        dependencies=[Depends(autorizar)],
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
     )
     def proponer_cambio(cliente_id: str, patron_id: str) -> dict:
         try:
@@ -538,7 +582,10 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             for escenario in ESCENARIOS
         ]
 
-    @app.post("/v1/clientes/{cliente_id}/sandbox", dependencies=[Depends(autorizar)])
+    @app.post(
+        "/v1/clientes/{cliente_id}/sandbox",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def sandbox(cliente_id: str, peticion: SandboxPeticion) -> dict:
         try:
             resultado = ejecutar_escenario(
@@ -554,7 +601,10 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             "turnos": resultado.turnos,
         }
 
-    @app.post("/v1/clientes/{cliente_id}/sandbox/todos", dependencies=[Depends(autorizar)])
+    @app.post(
+        "/v1/clientes/{cliente_id}/sandbox/todos",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
     def sandbox_completo(cliente_id: str, canal: Canal = Canal.WHATSAPP) -> list[dict]:
         try:
             return ejecutar_todos(servicio.hermes, cliente_id, canal)

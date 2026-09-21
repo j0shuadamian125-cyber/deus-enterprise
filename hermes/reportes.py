@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import BytesIO
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER
@@ -30,6 +31,13 @@ _TITULO = ParagraphStyle("titulo", parent=_ESTILOS["Title"], fontSize=20, spaceA
 _SECCION = ParagraphStyle("seccion", parent=_ESTILOS["Heading2"], fontSize=13, spaceBefore=14)
 _TEXTO = ParagraphStyle("texto", parent=_ESTILOS["BodyText"], fontSize=10, leading=14)
 _TENUE = ParagraphStyle("tenue", parent=_TEXTO, textColor=colors.HexColor("#5b6770"))
+_CELDA = ParagraphStyle("celda", parent=_TEXTO, fontSize=9, leading=11)
+_ENCABEZADO_CELDA = ParagraphStyle(
+    "celda_encabezado",
+    parent=_CELDA,
+    fontName="Helvetica-Bold",
+    textColor=colors.HexColor("#0b3d3b"),
+)
 
 _ESTILO_TABLA = TableStyle(
     [
@@ -45,7 +53,13 @@ _ESTILO_TABLA = TableStyle(
 
 
 def _tabla(encabezados: list[str], filas: list[list[str]]) -> Table:
-    tabla = Table([encabezados, *filas], hAlign="LEFT", colWidths=[9 * cm, 6 * cm])
+    # Cada celda va como Paragraph para que el texto largo corte en lineas en
+    # vez de desbordarse sobre la columna vecina.
+    cuerpo = [
+        [Paragraph(escape(texto), _ENCABEZADO_CELDA) for texto in encabezados],
+        *[[Paragraph(escape(texto), _CELDA) for texto in fila] for fila in filas],
+    ]
+    tabla = Table(cuerpo, hAlign="LEFT", colWidths=[9 * cm, 6 * cm])
     tabla.setStyle(_ESTILO_TABLA)
     return tabla
 
@@ -98,7 +112,7 @@ def generar_reporte_pdf(almacen: Almacen, cliente: Cliente, metricas: dict) -> b
     partes: list = [
         Paragraph("Reporte ejecutivo", _TITULO),
         Paragraph(
-            f"{cliente.nombre_negocio} &middot; plan {cliente.plan.value} &middot; "
+            f"{cliente.nombre_negocio} \u00b7 plan {cliente.plan.value} \u00b7 "
             f"generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} "
             f"({cliente.zona_horaria})",
             _TENUE,
@@ -136,7 +150,7 @@ def generar_reporte_pdf(almacen: Almacen, cliente: Cliente, metricas: dict) -> b
     partes.append(Paragraph("Resultados registrados", _SECCION))
     if resultados:
         filas = [
-            [f"{r.objetivo} &rarr; {r.accion}", f"{r.resultado} ({r.impacto})"]
+            [f"{r.objetivo} \u2192 {r.accion}", f"{r.resultado} ({r.impacto})"]
             for r in resultados[:15]
         ]
         partes.append(_tabla(["Objetivo y accion", "Resultado"], filas))
@@ -149,6 +163,13 @@ def generar_reporte_pdf(almacen: Almacen, cliente: Cliente, metricas: dict) -> b
             )
         )
 
+    usos_por_estrategia: dict[str, int] = {}
+    for registro in resultados:
+        if registro.estrategia_id:
+            usos_por_estrategia[registro.estrategia_id] = (
+                usos_por_estrategia.get(registro.estrategia_id, 0) + 1
+            )
+
     partes.append(Paragraph("Estrategias en uso", _SECCION))
     if estrategias:
         partes.append(
@@ -157,7 +178,8 @@ def generar_reporte_pdf(almacen: Almacen, cliente: Cliente, metricas: dict) -> b
                 [
                     [
                         f"{e.nombre} (v{e.version}, {e.etapa.value})",
-                        f"{e.estado.value} &middot; {e.resultados.get('usos', 0)} usos",
+                        f"{e.estado.value} \u00b7 "
+                        f"{usos_por_estrategia.get(e.estrategia_id, 0)} usos",
                     ]
                     for e in estrategias
                 ],

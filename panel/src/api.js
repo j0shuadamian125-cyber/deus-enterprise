@@ -21,6 +21,21 @@ export function borrarToken() {
   sessionStorage.removeItem("hermes_panel_token");
 }
 
+function textoDeDetalle(detalle, respaldo) {
+  if (!detalle) return respaldo;
+  if (typeof detalle === "string") return detalle;
+  // 422 de FastAPI: lista de errores por campo.
+  if (Array.isArray(detalle)) {
+    return detalle
+      .map((error) => {
+        const campo = (error.loc || []).slice(1).join(".");
+        return campo ? `${campo}: ${error.msg}` : error.msg;
+      })
+      .join("; ");
+  }
+  return JSON.stringify(detalle);
+}
+
 async function peticion(ruta, { metodo = "GET", cuerpo } = {}) {
   const respuesta = await fetch(`${BASE}${ruta}`, {
     method: metodo,
@@ -33,7 +48,7 @@ async function peticion(ruta, { metodo = "GET", cuerpo } = {}) {
   const texto = await respuesta.text();
   const datos = texto ? JSON.parse(texto) : null;
   if (!respuesta.ok) {
-    throw new ErrorApi(respuesta.status, datos?.detail || respuesta.statusText);
+    throw new ErrorApi(respuesta.status, textoDeDetalle(datos?.detail, respuesta.statusText));
   }
   return datos;
 }

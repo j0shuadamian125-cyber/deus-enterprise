@@ -214,3 +214,52 @@ def test_guion_de_llamada_asistida(cliente_http: TestClient):
     )
     assert respuesta.status_code == 200
     assert respuesta.json()["guion"]
+
+
+def test_tenant_inexistente_responde_404_y_no_una_lista_vacia(cliente_http: TestClient):
+    respuesta = cliente_http.get("/v1/clientes/cli_fantasma/leads", headers=CABECERAS)
+    assert respuesta.status_code == 404
+    assert respuesta.json()["detail"] == "Cliente inexistente"
+
+
+def test_aprobar_sin_respuesta_sugerida_falla_en_vez_de_dejarlo_pendiente(
+    cliente_http: TestClient, servicio: Servicio
+):
+    _alta(cliente_http)
+    cliente_http.post(
+        "/v1/webhooks/whatsapp/cli_001",
+        data={"From": "whatsapp:+521", "Body": "quiero hablar con una persona"},
+    )
+    pendientes = cliente_http.get(
+        "/v1/clientes/cli_001/escalamientos?estado=pendiente", headers=CABECERAS
+    ).json()
+    assert pendientes
+    escalamiento = servicio.almacen.obtener_escalamiento("cli_001", pendientes[0]["escalamiento_id"])
+    escalamiento.respuesta_sugerida = "   "
+    servicio.almacen.guardar_escalamiento(escalamiento)
+
+    respuesta = cliente_http.post(
+        f"/v1/clientes/cli_001/escalamientos/{escalamiento.escalamiento_id}/intervenir",
+        headers=CABECERAS,
+        json={"atendido_por": "joshua", "accion": "aprobar"},
+    )
+    assert respuesta.status_code == 422
+    sigue = servicio.almacen.obtener_escalamiento("cli_001", escalamiento.escalamiento_id)
+    assert sigue.estado.value == "pendiente"
+
+
+def test_estrategias_reportan_usos_medidos(cliente_http: TestClient):
+    _alta(cliente_http)
+    creada = cliente_http.post(
+        "/v1/clientes/cli_001/estrategias",
+        headers=CABECERAS,
+        json={
+            "nombre": "Respuesta rapida",
+            "objetivo": "cerrar mas",
+            "etapa": Etapa.APERTURA.value,
+            "plantilla": "Hola {nombre}",
+        },
+    )
+    assert creada.status_code == 200, creada.text
+    listado = cliente_http.get("/v1/clientes/cli_001/estrategias", headers=CABECERAS).json()
+    assert listado[0]["medicion"] == {"usos": 0, "exitos": 0}
