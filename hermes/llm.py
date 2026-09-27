@@ -61,6 +61,13 @@ GUION_APROBADO: dict[Etapa, str] = {
 }
 
 
+def _personalizar(plantilla: str, nombre: str | None) -> str:
+    if nombre and nombre.strip():
+        return plantilla.format(nombre=nombre.strip())
+    sin_nombre = plantilla.replace(", {nombre}", "").replace("{nombre}", "")
+    return " ".join(sin_nombre.split())
+
+
 def _ajustar_a_canal(texto: str, canal: Canal, negocio: str, saludo: str = "Buen dia") -> str:
     if canal == Canal.WHATSAPP:
         return "\n".join(texto.split("\n")[:3])
@@ -79,7 +86,7 @@ class MotorGuion:
     def responder(
         self, lead: Lead, canal: Canal, negocio: str, saludo: str = "Buen dia"
     ) -> RespuestaGenerada:
-        plantilla = GUION_APROBADO[lead.etapa].format(nombre=lead.nombre or "")
+        plantilla = _personalizar(GUION_APROBADO[lead.etapa], lead.nombre)
         return RespuestaGenerada(
             texto=_ajustar_a_canal(plantilla.replace("  ", " ").strip(), canal, negocio, saludo),
             con_guion_aprobado=True,

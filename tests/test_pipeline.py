@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from hermes.llm import MotorGuion
 from hermes.models import Canal, Estatus, Etapa
 from hermes.pipeline import (
     CanalNoHabilitadoError,
@@ -126,3 +127,15 @@ def test_hoja_leads_tiene_las_columnas_de_la_especificacion(hermes: Hermes, alma
         "nivel_decision",
         "canal_preferido_lead",
     }
+
+
+def test_guion_sin_nombre_no_deja_coma_suelta(hermes: Hermes, almacen: Almacen):
+    dar_de_alta(almacen)
+    resultado = hermes.atender(entrante("cli_001", "Hola"))
+    assert resultado.lead.nombre in (None, "")
+    for etapa in Etapa:
+        resultado.lead.etapa = etapa
+        texto = MotorGuion().responder(resultado.lead, Canal.WHATSAPP, "Negocio").texto
+        assert ", ." not in texto
+        assert ",." not in texto
+        assert " ," not in texto
