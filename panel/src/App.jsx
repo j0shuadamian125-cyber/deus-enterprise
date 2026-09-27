@@ -69,6 +69,7 @@ export default function App() {
 
   useEffect(() => {
     if (!autenticado) return;
+    setError("");
     api
       .clientes()
       .then((lista) => {
