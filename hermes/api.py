@@ -15,10 +15,13 @@ Autenticacion:
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Mapping
+from hmac import compare_digest
 from typing import Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
@@ -44,6 +47,7 @@ from .pipeline import (
     ResultadoAtencion,
 )
 from .reportes import generar_reporte_pdf
+from .resilience import LimitadorTasa
 from .sandbox import ESCENARIOS, SandboxError, ejecutar_escenario, ejecutar_todos
 from .storage import AislamientoError
 from .strategies import EstrategiaError
@@ -135,6 +139,16 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         description="Modulo de ventas y atencion multicanal de DEUS",
     )
     app.state.servicio = servicio
+    limitador = LimitadorTasa(maximo=servicio.config.limite_webhook_por_minuto)
+    candados: dict[str, threading.Lock] = {}
+    candado_registro = threading.Lock()
+
+    def candado_de(cliente_id: str) -> threading.Lock:
+        """Serializa el trabajo de un tenant: 'consultar evento y procesarlo' es
+        una seccion critica, si no dos webhooks simultaneos crean leads gemelos."""
+        with candado_registro:
+            return candados.setdefault(cliente_id, threading.Lock())
+
     if servicio.config.origenes_panel:
         app.add_middleware(
             CORSMiddleware,
@@ -143,16 +157,35 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             allow_headers=["X-Panel-Token", "Content-Type"],
         )
 
+    def _exigir_token(recibido: str | None, esperado: str | None, variable: str) -> None:
+        """Falla cerrado: sin token configurado la API no se sirve abierta."""
+        if not esperado:
+            if servicio.config.permitir_sin_token:
+                return
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"{variable} no esta configurado; HERMES no acepta peticiones sin "
+                    "autenticacion (defina la variable o HERMES_PERMITIR_SIN_TOKEN=true "
+                    "solo en desarrollo local)"
+                ),
+            )
+        if not recibido or not compare_digest(recibido, esperado):
+            raise HTTPException(status_code=401, detail=f"Token invalido ({variable})")
+
     def autorizar(x_panel_token: str | None = Header(default=None)) -> None:
-        esperado = servicio.config.token_panel
-        if esperado and x_panel_token != esperado:
-            raise HTTPException(status_code=401, detail="Token de panel invalido")
+        _exigir_token(x_panel_token, servicio.config.token_panel, "HERMES_PANEL_TOKEN")
 
     def autorizar_webhook(x_webhook_token: str | None = Header(default=None)) -> None:
         """Correo y voz: los proveedores no firman, se exige token compartido."""
-        esperado = servicio.config.token_webhook
-        if esperado and x_webhook_token != esperado:
-            raise HTTPException(status_code=401, detail="Token de webhook invalido")
+        _exigir_token(x_webhook_token, servicio.config.token_webhook, "HERMES_WEBHOOK_TOKEN")
+
+    def limitar(cliente_id: str, canal: Canal) -> None:
+        if not limitador.permitir(f"{cliente_id}:{canal.value}"):
+            raise HTTPException(
+                status_code=429,
+                detail="Demasiadas peticiones para este cliente en este canal",
+            )
 
     def exigir_cliente(cliente_id: str) -> None:
         """404 explicito: un tenant inexistente no debe verse como uno vacio."""
@@ -228,20 +261,26 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             servicio.whatsapp.verificar_firma(
                 _url_canonica(servicio, peticion), carga, x_twilio_signature
             )
-        elif servicio.config.token_webhook and x_webhook_token != servicio.config.token_webhook:
-            raise HTTPException(status_code=401, detail="Token de webhook invalido")
+        else:
+            _exigir_token(
+                x_webhook_token, servicio.config.token_webhook, "HERMES_WEBHOOK_TOKEN"
+            )
+        limitar(cliente_id, Canal.WHATSAPP)
 
-        evento_id = servicio.whatsapp.identificador_evento(carga)
-        repetido = _respuesta_repetida(servicio, cliente_id, Canal.WHATSAPP, evento_id)
-        if repetido is not None:
-            return repetido
+        def procesar() -> RespuestaAtencion:
+            with candado_de(cliente_id):
+                evento_id = servicio.whatsapp.identificador_evento(carga)
+                repetido = _respuesta_repetida(servicio, cliente_id, Canal.WHATSAPP, evento_id)
+                if repetido is not None:
+                    return repetido
+                evento = _normalizar(servicio.whatsapp, cliente_id, carga)
+                resultado = servicio.hermes.atender(evento)
+                _entregar(servicio, resultado, Canal.WHATSAPP)
+                respuesta = _a_respuesta(resultado, Canal.WHATSAPP)
+                _marcar_evento(servicio, cliente_id, Canal.WHATSAPP, evento_id, respuesta)
+                return respuesta
 
-        evento = _normalizar(servicio.whatsapp, cliente_id, carga)
-        resultado = servicio.hermes.atender(evento)
-        _entregar(servicio, resultado, Canal.WHATSAPP)
-        respuesta = _a_respuesta(resultado, Canal.WHATSAPP)
-        _marcar_evento(servicio, cliente_id, Canal.WHATSAPP, evento_id, respuesta)
-        return respuesta
+        return await run_in_threadpool(procesar)
 
     @app.post(
         "/v1/webhooks/correo/{cliente_id}",
@@ -250,17 +289,22 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
     )
     async def webhook_correo(cliente_id: str, peticion: Request) -> RespuestaAtencion:
         carga = await _carga(peticion)
-        evento_id = servicio.correo.identificador_evento(carga)
-        repetido = _respuesta_repetida(servicio, cliente_id, Canal.CORREO, evento_id)
-        if repetido is not None:
-            return repetido
+        limitar(cliente_id, Canal.CORREO)
 
-        evento = _normalizar(servicio.correo, cliente_id, carga)
-        resultado = servicio.hermes.atender(evento)
-        _entregar(servicio, resultado, Canal.CORREO)
-        respuesta = _a_respuesta(resultado, Canal.CORREO)
-        _marcar_evento(servicio, cliente_id, Canal.CORREO, evento_id, respuesta)
-        return respuesta
+        def procesar() -> RespuestaAtencion:
+            with candado_de(cliente_id):
+                evento_id = servicio.correo.identificador_evento(carga)
+                repetido = _respuesta_repetida(servicio, cliente_id, Canal.CORREO, evento_id)
+                if repetido is not None:
+                    return repetido
+                evento = _normalizar(servicio.correo, cliente_id, carga)
+                resultado = servicio.hermes.atender(evento)
+                _entregar(servicio, resultado, Canal.CORREO)
+                respuesta = _a_respuesta(resultado, Canal.CORREO)
+                _marcar_evento(servicio, cliente_id, Canal.CORREO, evento_id, respuesta)
+                return respuesta
+
+        return await run_in_threadpool(procesar)
 
     @app.post("/v1/webhooks/llamada/{cliente_id}", dependencies=[Depends(autorizar_webhook)])
     async def webhook_llamada(
@@ -272,35 +316,43 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         servicio.llamada.verificar_firma(
             _url_canonica(servicio, peticion), carga, x_twilio_signature
         )
-        evento_id = servicio.llamada.identificador_evento(carga)
-        if evento_id:
-            previa = servicio.almacen.evento_ya_procesado(cliente_id, Canal.LLAMADA.value, evento_id)
-            if previa is not None:
-                return {"repetido": True, "atencion": _json(previa)}
+        limitar(cliente_id, Canal.LLAMADA)
 
-        evento = _normalizar(servicio.llamada, cliente_id, carga)
-        llamada, atencion = servicio.hermes.registrar_llamada(
-            cliente_id=cliente_id,
-            contacto=evento.contacto,
-            nivel_servicio=servicio.llamada.nivel_servicio(carga),
-            transcripcion=evento.texto,
-            duracion_segundos=evento.metadatos.get("duracion_segundos", 0),
-            url_grabacion=evento.metadatos.get("url_grabacion"),
-            resultado=servicio.llamada.resultado(carga),
-            nombre=evento.nombre,
-            fuente=evento.fuente,
-            proveedor=evento.metadatos.get("proveedor"),
-            call_sid=evento_id,
-        )
-        cuerpo = {
-            "llamada": llamada.model_dump(mode="json"),
-            "atencion": _a_respuesta(atencion, Canal.LLAMADA).model_dump(mode="json"),
-        }
-        if evento_id:
-            servicio.almacen.marcar_evento(
-                cliente_id, Canal.LLAMADA.value, evento_id, _texto(cuerpo["atencion"])
-            )
-        return cuerpo
+        def procesar() -> dict:
+            with candado_de(cliente_id):
+                evento_id = servicio.llamada.identificador_evento(carga)
+                if evento_id:
+                    previa = servicio.almacen.evento_ya_procesado(
+                        cliente_id, Canal.LLAMADA.value, evento_id
+                    )
+                    if previa is not None:
+                        return {"repetido": True, "atencion": _json(previa)}
+
+                evento = _normalizar(servicio.llamada, cliente_id, carga)
+                llamada, atencion = servicio.hermes.registrar_llamada(
+                    cliente_id=cliente_id,
+                    contacto=evento.contacto,
+                    nivel_servicio=servicio.llamada.nivel_servicio(carga),
+                    transcripcion=evento.texto,
+                    duracion_segundos=evento.metadatos.get("duracion_segundos", 0),
+                    url_grabacion=evento.metadatos.get("url_grabacion"),
+                    resultado=servicio.llamada.resultado(carga),
+                    nombre=evento.nombre,
+                    fuente=evento.fuente,
+                    proveedor=evento.metadatos.get("proveedor"),
+                    call_sid=evento_id,
+                )
+                cuerpo = {
+                    "llamada": llamada.model_dump(mode="json"),
+                    "atencion": _a_respuesta(atencion, Canal.LLAMADA).model_dump(mode="json"),
+                }
+                if evento_id:
+                    servicio.almacen.marcar_evento(
+                        cliente_id, Canal.LLAMADA.value, evento_id, _texto(cuerpo["atencion"])
+                    )
+                return cuerpo
+
+        return await run_in_threadpool(procesar)
 
     # --- CRM -------------------------------------------------------------
     @app.get(

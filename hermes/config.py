@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .channels import AdaptadorCorreo, AdaptadorLlamada, AdaptadorWhatsApp
 from .governance import Gobernanza
@@ -13,19 +13,45 @@ from .pipeline import Hermes
 from .storage import Almacen
 
 
-@dataclass
-class Configuracion:
-    ruta_base_datos: str = os.environ.get("HERMES_DB", "hermes.db")
-    anthropic_api_key: str | None = os.environ.get("ANTHROPIC_API_KEY")
-    modelo: str = os.environ.get("HERMES_MODELO", "claude-sonnet-4-20250514")
-    token_panel: str | None = os.environ.get("HERMES_PANEL_TOKEN")
-    token_webhook: str | None = os.environ.get("HERMES_WEBHOOK_TOKEN")
-    url_publica: str | None = os.environ.get("HERMES_URL_PUBLICA")
-    envio_real: bool = os.environ.get("HERMES_ENVIO_REAL", "false").lower() == "true"
-    origenes_panel: tuple[str, ...] = tuple(
+def _entorno(nombre: str, respaldo: str = "") -> str:
+    return os.environ.get(nombre, respaldo)
+
+
+def _bandera(nombre: str, respaldo: bool = False) -> bool:
+    return os.environ.get(nombre, str(respaldo)).strip().lower() == "true"
+
+
+def _origenes() -> tuple[str, ...]:
+    return tuple(
         origen.strip()
         for origen in os.environ.get("HERMES_ORIGENES_PANEL", "").split(",")
         if origen.strip()
+    )
+
+
+@dataclass
+class Configuracion:
+    """Se lee del entorno en cada instancia, no al importar el modulo."""
+
+    ruta_base_datos: str = field(default_factory=lambda: _entorno("HERMES_DB", "hermes.db"))
+    anthropic_api_key: str | None = field(
+        default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY")
+    )
+    modelo: str = field(
+        default_factory=lambda: _entorno("HERMES_MODELO", "claude-sonnet-4-20250514")
+    )
+    token_panel: str | None = field(default_factory=lambda: os.environ.get("HERMES_PANEL_TOKEN"))
+    token_webhook: str | None = field(
+        default_factory=lambda: os.environ.get("HERMES_WEBHOOK_TOKEN")
+    )
+    url_publica: str | None = field(default_factory=lambda: os.environ.get("HERMES_URL_PUBLICA"))
+    envio_real: bool = field(default_factory=lambda: _bandera("HERMES_ENVIO_REAL"))
+    origenes_panel: tuple[str, ...] = field(default_factory=_origenes)
+    # Sin token configurado la API queda abierta; solo se permite si se pide
+    # explicitamente (desarrollo local), nunca por omision.
+    permitir_sin_token: bool = field(default_factory=lambda: _bandera("HERMES_PERMITIR_SIN_TOKEN"))
+    limite_webhook_por_minuto: int = field(
+        default_factory=lambda: int(_entorno("HERMES_LIMITE_WEBHOOK", "120") or 120)
     )
 
 

@@ -147,6 +147,11 @@ class Almacen:
         self._conexion.row_factory = sqlite3.Row
         self._candado = threading.Lock()
         with self._candado:
+            if ruta != ":memory:":
+                # WAL + espera activa: el worker de correo corre en otro proceso
+                # sobre el mismo fichero y sin esto recibe "database is locked".
+                self._conexion.execute("PRAGMA journal_mode=WAL")
+            self._conexion.execute("PRAGMA busy_timeout=5000")
             self._conexion.executescript(ESQUEMA)
             self._conexion.commit()
 

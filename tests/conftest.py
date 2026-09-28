@@ -26,7 +26,13 @@ def hermes(almacen: Almacen) -> Hermes:
 @pytest.fixture()
 def servicio(almacen: Almacen, hermes: Hermes) -> Servicio:
     return Servicio(
-        config=Configuracion(ruta_base_datos=":memory:", token_panel="token-de-prueba"),
+        config=Configuracion(
+            ruta_base_datos=":memory:",
+            token_panel="token-de-prueba",
+            # Los webhooks del fixture no llevan token: es el modo de desarrollo
+            # explicito, no el comportamiento por omision (ver test_api).
+            permitir_sin_token=True,
+        ),
         almacen=almacen,
         hermes=hermes,
         whatsapp=AdaptadorWhatsApp(validar_firmas=False),

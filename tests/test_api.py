@@ -46,6 +46,46 @@ def test_el_panel_exige_token(cliente_http: TestClient):
     assert cliente_http.get("/v1/clientes").status_code == 401
 
 
+def test_sin_token_configurado_la_api_no_se_abre(servicio: Servicio):
+    """Falla cerrado: un despliegue sin HERMES_PANEL_TOKEN no queda publico."""
+    servicio.config.token_panel = None
+    servicio.config.permitir_sin_token = False
+    cliente = TestClient(crear_app(servicio))
+    assert cliente.get("/v1/clientes").status_code == 503
+    assert cliente.post("/v1/webhooks/correo/cli_001", json={}).status_code == 503
+
+
+def test_webhook_exige_su_token_cuando_esta_configurado(servicio: Servicio):
+    servicio.config.token_webhook = "token-webhook"
+    servicio.config.permitir_sin_token = False
+    cliente = TestClient(crear_app(servicio))
+    _alta(cliente)
+    sin_token = cliente.post(
+        "/v1/webhooks/whatsapp/cli_001", data={"From": "whatsapp:+521", "Body": "hola"}
+    )
+    assert sin_token.status_code == 401
+    con_token = cliente.post(
+        "/v1/webhooks/whatsapp/cli_001",
+        data={"From": "whatsapp:+521", "Body": "hola"},
+        headers={"X-Webhook-Token": "token-webhook"},
+    )
+    assert con_token.status_code == 200
+
+
+def test_el_limite_de_tasa_protege_el_webhook(servicio: Servicio):
+    servicio.config.limite_webhook_por_minuto = 2
+    cliente = TestClient(crear_app(servicio))
+    _alta(cliente)
+    codigos = [
+        cliente.post(
+            "/v1/webhooks/whatsapp/cli_001",
+            data={"From": "whatsapp:+521", "Body": f"hola {i}"},
+        ).status_code
+        for i in range(3)
+    ]
+    assert codigos == [200, 200, 429]
+
+
 def test_onboarding_incompleto_es_rechazado(cliente_http: TestClient):
     respuesta = cliente_http.post(
         "/v1/onboarding",

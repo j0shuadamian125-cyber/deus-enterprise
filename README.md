@@ -33,14 +33,18 @@ uvicorn hermes.main:app --reload
 ```
 
 `GET /health` responde sin configuracion. El resto del panel exige la cabecera
-`X-Panel-Token` cuando `HERMES_PANEL_TOKEN` esta definido.
+`X-Panel-Token`. Si `HERMES_PANEL_TOKEN` no esta definido la API responde `503`
+en vez de quedar abierta; para desarrollo local se abre con
+`HERMES_PERMITIR_SIN_TOKEN=true`.
 
 ## Variables de entorno
 
 | Variable | Para que sirve |
 | --- | --- |
 | `HERMES_DB` | Ruta del archivo SQLite (por defecto `hermes.db`) |
-| `HERMES_PANEL_TOKEN` | Token del panel interno; sin el, los endpoints de panel quedan abiertos |
+| `HERMES_PANEL_TOKEN` | Token del panel interno; sin el, la API responde `503` |
+| `HERMES_PERMITIR_SIN_TOKEN` | `true` solo en desarrollo local: permite servir sin token |
+| `HERMES_LIMITE_WEBHOOK` | Peticiones por minuto y tenant en cada webhook (por defecto 120; al excederlo, `429`) |
 | `HERMES_WEBHOOK_TOKEN` | Token de los webhooks de correo y voz (`X-Webhook-Token`) |
 | `HERMES_URL_PUBLICA` | URL publica exacta del webhook; Twilio firma sobre ella |
 | `HERMES_ORIGENES_PANEL` | Origenes permitidos por CORS, separados por coma (nunca `*`) |
@@ -154,8 +158,13 @@ y la vista *Integraciones* del panel dicen en todo momento que hay configurado.
 
 ## Limitaciones conocidas
 
-- El almacenamiento es SQLite: sirve para el piloto, no para varios procesos
+- El almacenamiento es SQLite en modo WAL con `busy_timeout`: soporta el worker
+  de correo en otro proceso, pero no esta medido para varios procesos web
   escribiendo en paralelo.
+- La idempotencia de webhooks se serializa con un candado por tenant **dentro
+  del proceso**; con varias instancias del API haria falta un bloqueo en la base
+  de datos o una cola.
+- El limite de tasa de webhooks es en memoria y por proceso.
 - No se ha medido la escala; no se afirma ninguna cifra de concurrencia.
 - El reporte PDF no incluye graficos todavia: solo tablas y conclusion.
 - La voz depende de que el proveedor entregue la transcripcion al webhook.
