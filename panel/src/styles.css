@@ -224,9 +224,24 @@ tr:last-child td {
 
 .columnas {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  /* La tabla crece hasta su contenido: con ancho fijo desbordaba la columna
+     y la ultima cabecera quedaba debajo del detalle abierto. */
+  grid-template-columns: minmax(320px, auto) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+}
+
+.columnas > * {
+  min-width: 0;
+}
+
+.celda-lead {
+  display: inline-block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 h2 {
