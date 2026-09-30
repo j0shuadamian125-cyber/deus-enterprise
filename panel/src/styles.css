@@ -235,6 +235,15 @@ tr:last-child td {
   min-width: 0;
 }
 
+.celda-lead {
+  display: inline-block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
 h2 {
   margin: 0 0 14px;
   font-size: 18px;

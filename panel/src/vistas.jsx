@@ -87,7 +87,9 @@ export function Pipeline({ clienteId, alError }) {
             {leads.map((lead) => (
               <tr key={lead.lead_id} onClick={() => abrir(lead.lead_id)} style={{ cursor: "pointer" }}>
                 <td>
-                  {lead.nombre || lead.contacto}
+                  <span className="celda-lead" title={lead.nombre || lead.contacto}>
+                    {lead.nombre || lead.contacto}
+                  </span>
                   {lead.requiere_humano && <span className="etiqueta pendiente"> humano</span>}
                 </td>
                 <td>{lead.etapa}</td>
@@ -209,7 +211,11 @@ export function Bandeja({ clienteId, alError }) {
                 style={{ cursor: "pointer" }}
               >
                 <td>{esc.motivo}</td>
-                <td>{esc.lead_id}</td>
+                <td>
+                  <span className="celda-lead" title={esc.lead_id}>
+                    {esc.lead_id}
+                  </span>
+                </td>
               </tr>
             ))}
             {pendientes.length === 0 && (
