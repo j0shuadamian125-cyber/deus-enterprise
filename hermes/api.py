@@ -197,6 +197,8 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         if not token:
             return None
         esperado = servicio.config.token_panel
+        if not esperado and not servicio.config.permitir_sin_token:
+            return None
         if esperado and compare_digest(token, esperado):
             return None
         return servicio.almacen.cliente_de_acceso(_hash_token(token))

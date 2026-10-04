@@ -81,28 +81,37 @@ export default function App() {
 
   useEffect(() => {
     if (!autenticado) return;
+    let vigente = true;
     setError("");
     api
       .sesion()
       .then(async (actual) => {
+        if (!vigente) return;
         setSesion(actual);
         if (actual.rol === "cliente") {
           const propio = await api.cliente(actual.cliente_id);
+          if (!vigente) return;
           setClientes([propio]);
           setClientesCargados(true);
           setClienteId(actual.cliente_id);
           return;
         }
         const lista = await api.clientes();
+        if (!vigente) return;
         setClientes(lista);
         setClientesCargados(true);
         setClienteId((previo) => previo || lista[0]?.cliente_id || "");
-        api.estado().then(setEstado).catch(alError);
+        const integraciones = await api.estado();
+        if (vigente) setEstado(integraciones);
       })
       .catch((exc) => {
+        if (!vigente) return;
         setClientesCargados(false);
         alError(exc);
       });
+    return () => {
+      vigente = false;
+    };
   }, [autenticado, intento]);
 
   if (!autenticado) return <Acceso alEntrar={() => setAutenticado(true)} />;

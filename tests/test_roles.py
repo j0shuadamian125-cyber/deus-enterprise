@@ -241,3 +241,12 @@ def test_la_intervencion_del_cliente_queda_firmada_con_su_rol(
     )
     assert respuesta.status_code == 200, respuesta.text
     assert respuesta.json()["escalamiento"]["atendido_por"] == "cliente:cli_001/dueña"
+
+
+def test_sin_token_de_operador_configurado_tampoco_entra_el_cliente(
+    http: TestClient, servicio: Servicio, token_cliente: str
+):
+    servicio.config.token_panel = None
+    servicio.config.permitir_sin_token = False
+    respuesta = http.get("/v1/clientes/cli_001/leads", headers={"X-Panel-Token": token_cliente})
+    assert respuesta.status_code == 503

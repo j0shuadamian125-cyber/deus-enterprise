@@ -753,6 +753,7 @@ export function Reporte({ clienteId, alError }) {
 export function Accesos({ clienteId, cliente, alError }) {
   const [accesos, setAccesos] = useState([]);
   const [nuevo, setNuevo] = useState(null);
+  const [generando, setGenerando] = useState(false);
 
   const cargar = () => api.accesos(clienteId).then(setAccesos).catch(alError);
   useEffect(() => {
@@ -772,7 +773,10 @@ export function Accesos({ clienteId, cliente, alError }) {
       <div className="fila">
         <button
           className="principal"
-          onClick={() =>
+          disabled={generando || Boolean(nuevo)}
+          title={nuevo ? "Entrega o revoca el token mostrado antes de generar otro" : ""}
+          onClick={() => {
+            setGenerando(true);
             api
               .crearAcceso(clienteId)
               .then((acceso) => {
@@ -780,14 +784,17 @@ export function Accesos({ clienteId, cliente, alError }) {
                 cargar();
               })
               .catch(alError)
-          }
+              .finally(() => setGenerando(false));
+          }}
         >
           Generar token de cliente
         </button>
       </div>
       {nuevo && (
         <div className="aviso">
-          Copia este token ahora, no se volverá a mostrar: <code>{nuevo.token}</code>
+          Copia el token de {nuevo.acceso_id} ahora, no se volverá a mostrar:{" "}
+          <code>{nuevo.token}</code>{" "}
+          <button onClick={() => setNuevo(null)}>Ya lo entregué</button>
         </div>
       )}
       <table>
@@ -813,7 +820,13 @@ export function Accesos({ clienteId, cliente, alError }) {
                 {!acceso.revocado_en && (
                   <button
                     onClick={() =>
-                      api.revocarAcceso(clienteId, acceso.acceso_id).then(cargar).catch(alError)
+                      api
+                        .revocarAcceso(clienteId, acceso.acceso_id)
+                        .then(() => {
+                          if (nuevo?.acceso_id === acceso.acceso_id) setNuevo(null);
+                          cargar();
+                        })
+                        .catch(alError)
                     }
                   >
                     Revocar
