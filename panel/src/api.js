@@ -1,5 +1,5 @@
-// Cliente HTTP del panel. El token del panel vive solo en memoria/sessionStorage
-// del operador; ninguna credencial de proveedor llega nunca al navegador.
+// Cliente HTTP del panel. El token (de operador o de cliente) vive solo en
+// sessionStorage; ninguna credencial de proveedor llega nunca al navegador.
 const BASE = import.meta.env.VITE_HERMES_API || "";
 
 export class ErrorApi extends Error {
@@ -69,9 +69,14 @@ export async function descargarReportePdf(clienteId) {
 }
 
 export const api = {
+  sesion: () => peticion("/v1/sesion"),
   estado: () => peticion("/v1/estado"),
   clientes: () => peticion("/v1/clientes"),
   cliente: (id) => peticion(`/v1/clientes/${id}`),
+  accesos: (id) => peticion(`/v1/clientes/${id}/accesos`),
+  crearAcceso: (id) => peticion(`/v1/clientes/${id}/accesos`, { metodo: "POST" }),
+  revocarAcceso: (id, accesoId) =>
+    peticion(`/v1/clientes/${id}/accesos/${accesoId}/revocar`, { metodo: "POST" }),
   leads: (id) => peticion(`/v1/clientes/${id}/leads`),
   lead: (id, leadId) => peticion(`/v1/clientes/${id}/leads/${leadId}`),
   seguimiento: (id, leadId) =>
@@ -104,14 +109,14 @@ export const api = {
   proponerPatron: (id, patronId) =>
     peticion(`/v1/clientes/${id}/patrones/${patronId}/proponer`, { metodo: "POST" }),
   decisiones: (id, estado) =>
-    peticion(`/v1/decisiones?cliente_id=${id}${estado ? `&estado=${estado}` : ""}`),
-  aprobar: (decisionId, aprobadoPor) =>
-    peticion(`/v1/decisiones/${decisionId}/aprobar`, {
+    peticion(`/v1/clientes/${id}/decisiones${estado ? `?estado=${estado}` : ""}`),
+  aprobar: (id, decisionId, aprobadoPor) =>
+    peticion(`/v1/clientes/${id}/decisiones/${decisionId}/aprobar`, {
       metodo: "POST",
       cuerpo: { aprobado_por: aprobadoPor },
     }),
-  rechazar: (decisionId, rechazadoPor, motivo) =>
-    peticion(`/v1/decisiones/${decisionId}/rechazar`, {
+  rechazar: (id, decisionId, rechazadoPor, motivo) =>
+    peticion(`/v1/clientes/${id}/decisiones/${decisionId}/rechazar`, {
       metodo: "POST",
       cuerpo: { rechazado_por: rechazadoPor, motivo },
     }),

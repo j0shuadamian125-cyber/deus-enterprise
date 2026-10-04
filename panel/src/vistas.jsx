@@ -50,7 +50,7 @@ export function Estado({ estado }) {
   );
 }
 
-export function Pipeline({ clienteId, alError }) {
+export function Pipeline({ clienteId, alError, esCliente }) {
   const [leads, setLeads] = useState([]);
   const [detalle, setDetalle] = useState(null);
 
@@ -110,33 +110,37 @@ export function Pipeline({ clienteId, alError }) {
             <div className="fila">
               <strong>{detalle.lead.nombre || detalle.lead.contacto}</strong>
               <span className="etiqueta">{detalle.lead.estatus}</span>
-              <button
-                onClick={() =>
-                  api.seguimiento(clienteId, detalle.lead.lead_id).then(cargar).catch(alError)
-                }
-              >
-                Programar seguimiento
-              </button>
-              <button
-                onClick={() =>
-                  api
-                    .cierre(clienteId, detalle.lead.lead_id, "ganado")
-                    .then(cargar)
-                    .catch(alError)
-                }
-              >
-                Marcar ganado
-              </button>
-              <button
-                onClick={() =>
-                  api
-                    .cierre(clienteId, detalle.lead.lead_id, "perdido")
-                    .then(cargar)
-                    .catch(alError)
-                }
-              >
-                Marcar perdido
-              </button>
+              {!esCliente && (
+                <>
+                  <button
+                    onClick={() =>
+                      api.seguimiento(clienteId, detalle.lead.lead_id).then(cargar).catch(alError)
+                    }
+                  >
+                    Programar seguimiento
+                  </button>
+                  <button
+                    onClick={() =>
+                      api
+                        .cierre(clienteId, detalle.lead.lead_id, "ganado")
+                        .then(cargar)
+                        .catch(alError)
+                    }
+                  >
+                    Marcar ganado
+                  </button>
+                  <button
+                    onClick={() =>
+                      api
+                        .cierre(clienteId, detalle.lead.lead_id, "perdido")
+                        .then(cargar)
+                        .catch(alError)
+                    }
+                  >
+                    Marcar perdido
+                  </button>
+                </>
+              )}
             </div>
             <p className="tenue">Objetivo: {detalle.lead.objetivo_actual}</p>
             <div className="conversacion">
@@ -280,7 +284,7 @@ export function Bandeja({ clienteId, alError }) {
   );
 }
 
-export function Estrategias({ clienteId, alError }) {
+export function Estrategias({ clienteId, alError, esCliente }) {
   const [estrategias, setEstrategias] = useState([]);
   const [patrones, setPatrones] = useState([]);
   const [decisiones, setDecisiones] = useState([]);
@@ -349,7 +353,7 @@ export function Estrategias({ clienteId, alError }) {
                       disabled={!decision || decision.estado !== "aprobada"}
                       title={
                         decision && decision.estado !== "aprobada"
-                          ? "Requiere aprobar la decisión en Gobernanza"
+                          ? `Requiere aprobar la decisión en ${esCliente ? "Aprobaciones" : "Gobernanza"}`
                           : ""
                       }
                       onClick={() =>
@@ -380,62 +384,68 @@ export function Estrategias({ clienteId, alError }) {
         </tbody>
       </table>
 
-      <h3>Nueva estrategia</h3>
-      <div className="fila">
-        <input
-          placeholder="Nombre"
-          value={borrador.nombre}
-          onChange={(e) => setBorrador({ ...borrador, nombre: e.target.value })}
-          style={{ maxWidth: 200 }}
-        />
-        <input
-          placeholder="Objetivo"
-          value={borrador.objetivo}
-          onChange={(e) => setBorrador({ ...borrador, objetivo: e.target.value })}
-          style={{ maxWidth: 220 }}
-        />
-        <select
-          value={borrador.etapa}
-          onChange={(e) => setBorrador({ ...borrador, etapa: e.target.value })}
-          style={{ maxWidth: 160 }}
-        >
-          {ETAPAS.map((etapa) => (
-            <option key={etapa} value={etapa}>
-              {etapa}
-            </option>
-          ))}
-        </select>
-      </div>
-      <textarea
-        rows={3}
-        placeholder="Plantilla de respuesta"
-        value={borrador.plantilla}
-        onChange={(e) => setBorrador({ ...borrador, plantilla: e.target.value })}
-      />
-      <div className="fila" style={{ marginTop: 10 }}>
-        <button
-          className="principal"
-          disabled={!borrador.nombre || !borrador.plantilla}
-          onClick={() =>
-            api
-              .crearEstrategia(clienteId, borrador)
-              .then(() => {
-                setBorrador({ ...borrador, nombre: "", plantilla: "" });
-                cargar();
-              })
-              .catch(alError)
-          }
-        >
-          Proponer estrategia
-        </button>
-      </div>
+      {!esCliente && (
+        <>
+          <h3>Nueva estrategia</h3>
+          <div className="fila">
+            <input
+              placeholder="Nombre"
+              value={borrador.nombre}
+              onChange={(e) => setBorrador({ ...borrador, nombre: e.target.value })}
+              style={{ maxWidth: 200 }}
+            />
+            <input
+              placeholder="Objetivo"
+              value={borrador.objetivo}
+              onChange={(e) => setBorrador({ ...borrador, objetivo: e.target.value })}
+              style={{ maxWidth: 220 }}
+            />
+            <select
+              value={borrador.etapa}
+              onChange={(e) => setBorrador({ ...borrador, etapa: e.target.value })}
+              style={{ maxWidth: 160 }}
+            >
+              {ETAPAS.map((etapa) => (
+                <option key={etapa} value={etapa}>
+                  {etapa}
+                </option>
+              ))}
+            </select>
+          </div>
+          <textarea
+            rows={3}
+            placeholder="Plantilla de respuesta"
+            value={borrador.plantilla}
+            onChange={(e) => setBorrador({ ...borrador, plantilla: e.target.value })}
+          />
+          <div className="fila" style={{ marginTop: 10 }}>
+            <button
+              className="principal"
+              disabled={!borrador.nombre || !borrador.plantilla}
+              onClick={() =>
+                api
+                  .crearEstrategia(clienteId, borrador)
+                  .then(() => {
+                    setBorrador({ ...borrador, nombre: "", plantilla: "" });
+                    cargar();
+                  })
+                  .catch(alError)
+              }
+            >
+              Proponer estrategia
+            </button>
+          </div>
+        </>
+      )}
 
       <h3>Patrones detectados</h3>
-      <div className="fila">
-        <button onClick={() => api.detectarPatrones(clienteId).then(cargar).catch(alError)}>
-          Detectar patrones ahora
-        </button>
-      </div>
+      {!esCliente && (
+        <div className="fila">
+          <button onClick={() => api.detectarPatrones(clienteId).then(cargar).catch(alError)}>
+            Detectar patrones ahora
+          </button>
+        </div>
+      )}
       <table>
         <thead>
           <tr>
@@ -456,7 +466,7 @@ export function Estrategias({ clienteId, alError }) {
                 </span>
               </td>
               <td>
-                {!patron.decision_id && (
+                {!patron.decision_id && !esCliente && (
                   <button
                     onClick={() =>
                       api.proponerPatron(clienteId, patron.patron_id).then(cargar).catch(alError)
@@ -481,7 +491,7 @@ export function Estrategias({ clienteId, alError }) {
   );
 }
 
-export function Decisiones({ clienteId, alError }) {
+export function Decisiones({ clienteId, alError, esCliente }) {
   const [decisiones, setDecisiones] = useState([]);
   const [operador, setOperador] = useState("");
 
@@ -493,7 +503,12 @@ export function Decisiones({ clienteId, alError }) {
 
   return (
     <>
-      <h2>Gobernanza</h2>
+      <h2>{esCliente ? "Aprobaciones de estrategias" : "Gobernanza"}</h2>
+      {esCliente && (
+        <p className="tenue">
+          Estrategias que HERMES propone para tu negocio. Ninguna se aplica sin tu aprobación.
+        </p>
+      )}
       <div className="fila">
         <input
           placeholder="Quién aprueba"
@@ -520,14 +535,22 @@ export function Decisiones({ clienteId, alError }) {
               <td>
                 <button
                   disabled={!operador}
-                  onClick={() => api.aprobar(decision.decision_id, operador).then(cargar).catch(alError)}
+                  onClick={() =>
+                    api
+                      .aprobar(clienteId, decision.decision_id, operador)
+                      .then(cargar)
+                      .catch(alError)
+                  }
                 >
                   Aprobar
                 </button>{" "}
                 <button
                   disabled={!operador}
                   onClick={() =>
-                    api.rechazar(decision.decision_id, operador, "").then(cargar).catch(alError)
+                    api
+                      .rechazar(clienteId, decision.decision_id, operador, "")
+                      .then(cargar)
+                      .catch(alError)
                   }
                 >
                   Rechazar
@@ -718,6 +741,91 @@ export function Reporte({ clienteId, alError }) {
             <tr>
               <td colSpan={5} className="tenue">
                 Sin resultados registrados todavía.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+export function Accesos({ clienteId, cliente, alError }) {
+  const [accesos, setAccesos] = useState([]);
+  const [nuevo, setNuevo] = useState(null);
+
+  const cargar = () => api.accesos(clienteId).then(setAccesos).catch(alError);
+  useEffect(() => {
+    setAccesos([]);
+    setNuevo(null);
+    if (clienteId) cargar();
+  }, [clienteId]);
+
+  return (
+    <>
+      <h2>Accesos del cliente</h2>
+      <p className="tenue">
+        Un token de cliente sólo ve el tenant de {cliente?.nombre_negocio || clienteId}: pipeline,
+        leads, reporte, intervención humana y aprobación de estrategias. Se muestra una sola vez;
+        HERMES guarda únicamente su hash.
+      </p>
+      <div className="fila">
+        <button
+          className="principal"
+          onClick={() =>
+            api
+              .crearAcceso(clienteId)
+              .then((acceso) => {
+                setNuevo(acceso);
+                cargar();
+              })
+              .catch(alError)
+          }
+        >
+          Generar token de cliente
+        </button>
+      </div>
+      {nuevo && (
+        <div className="aviso">
+          Copia este token ahora, no se volverá a mostrar: <code>{nuevo.token}</code>
+        </div>
+      )}
+      <table>
+        <thead>
+          <tr>
+            <th>Acceso</th>
+            <th>Creado</th>
+            <th>Estado</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {accesos.map((acceso) => (
+            <tr key={acceso.acceso_id}>
+              <td>{acceso.acceso_id}</td>
+              <td>{acceso.creado_en}</td>
+              <td>
+                <span className={`etiqueta ${acceso.revocado_en ? "mal" : "ok"}`}>
+                  {acceso.revocado_en ? "revocado" : "vigente"}
+                </span>
+              </td>
+              <td>
+                {!acceso.revocado_en && (
+                  <button
+                    onClick={() =>
+                      api.revocarAcceso(clienteId, acceso.acceso_id).then(cargar).catch(alError)
+                    }
+                  >
+                    Revocar
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+          {accesos.length === 0 && (
+            <tr>
+              <td colSpan={4} className="tenue">
+                Este cliente no tiene accesos emitidos.
               </td>
             </tr>
           )}

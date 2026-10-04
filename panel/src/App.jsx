@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api, borrarToken, guardarToken, leerToken } from "./api.js";
 import {
+  Accesos,
   Bandeja,
   Decisiones,
   Estado,
@@ -11,14 +12,24 @@ import {
   Reporte,
 } from "./vistas.jsx";
 
-const VISTAS = [
+const VISTAS_OPERADOR = [
   ["pipeline", "Pipeline"],
   ["bandeja", "Intervención"],
   ["estrategias", "Estrategias"],
   ["decisiones", "Gobernanza"],
   ["sandbox", "Sandbox"],
   ["reporte", "Reporte"],
+  ["accesos", "Accesos"],
   ["estado", "Integraciones"],
+];
+
+// Reflejo de RUTAS_CLIENTE del backend; la restriccion real la impone la API.
+const VISTAS_CLIENTE = [
+  ["pipeline", "Pipeline"],
+  ["bandeja", "Intervención"],
+  ["estrategias", "Estrategias"],
+  ["decisiones", "Aprobaciones"],
+  ["reporte", "Reporte"],
 ];
 
 function Acceso({ alEntrar }) {
@@ -28,7 +39,7 @@ function Acceso({ alEntrar }) {
   const entrar = async () => {
     guardarToken(token);
     try {
-      await api.clientes();
+      await api.sesion();
       alEntrar();
     } catch (exc) {
       borrarToken();
@@ -57,6 +68,7 @@ function Acceso({ alEntrar }) {
 
 export default function App() {
   const [autenticado, setAutenticado] = useState(Boolean(leerToken()));
+  const [sesion, setSesion] = useState(null);
   const [clientes, setClientes] = useState([]);
   const [clienteId, setClienteId] = useState("");
   const [estado, setEstado] = useState(null);
@@ -71,42 +83,57 @@ export default function App() {
     if (!autenticado) return;
     setError("");
     api
-      .clientes()
-      .then((lista) => {
+      .sesion()
+      .then(async (actual) => {
+        setSesion(actual);
+        if (actual.rol === "cliente") {
+          const propio = await api.cliente(actual.cliente_id);
+          setClientes([propio]);
+          setClientesCargados(true);
+          setClienteId(actual.cliente_id);
+          return;
+        }
+        const lista = await api.clientes();
         setClientes(lista);
         setClientesCargados(true);
-        setClienteId((actual) => actual || lista[0]?.cliente_id || "");
+        setClienteId((previo) => previo || lista[0]?.cliente_id || "");
+        api.estado().then(setEstado).catch(alError);
       })
       .catch((exc) => {
         setClientesCargados(false);
         alError(exc);
       });
-    api.estado().then(setEstado).catch(alError);
   }, [autenticado, intento]);
 
   if (!autenticado) return <Acceso alEntrar={() => setAutenticado(true)} />;
 
+  const esCliente = sesion?.rol === "cliente";
+  const vistas = esCliente ? VISTAS_CLIENTE : VISTAS_OPERADOR;
   const cliente = clientes.find((c) => c.cliente_id === clienteId);
-  const propiedades = { clienteId, cliente, alError };
+  const propiedades = { clienteId, cliente, alError, esCliente };
 
   return (
     <div className="disposicion">
       <aside className="lateral">
         <h1 className="marca">HERMES</h1>
-        <select value={clienteId} onChange={(e) => setClienteId(e.target.value)}>
-          {clientes.map((c) => (
-            <option key={c.cliente_id} value={c.cliente_id}>
-              {c.nombre_negocio}
-            </option>
-          ))}
-          {clientes.length === 0 && (
-            <option value="">
-              {clientesCargados ? "Sin clientes dados de alta" : "Sin conexión con la API"}
-            </option>
-          )}
-        </select>
+        {esCliente ? (
+          <p>{cliente?.nombre_negocio || "Cargando…"}</p>
+        ) : (
+          <select value={clienteId} onChange={(e) => setClienteId(e.target.value)}>
+            {clientes.map((c) => (
+              <option key={c.cliente_id} value={c.cliente_id}>
+                {c.nombre_negocio}
+              </option>
+            ))}
+            {clientes.length === 0 && (
+              <option value="">
+                {clientesCargados ? "Sin clientes dados de alta" : "Sin conexión con la API"}
+              </option>
+            )}
+          </select>
+        )}
         <nav>
-          {VISTAS.map(([clave, rotulo]) => (
+          {vistas.map(([clave, rotulo]) => (
             <button
               key={clave}
               className={vista === clave ? "activa" : ""}
@@ -123,6 +150,10 @@ export default function App() {
           style={{ marginTop: 20 }}
           onClick={() => {
             borrarToken();
+            setSesion(null);
+            setClientes([]);
+            setClienteId("");
+            setVista("pipeline");
             setAutenticado(false);
           }}
         >
@@ -149,11 +180,14 @@ export default function App() {
             {vista === "bandeja" && <Bandeja key={clienteId} {...propiedades} />}
             {vista === "estrategias" && <Estrategias key={clienteId} {...propiedades} />}
             {vista === "decisiones" && <Decisiones key={clienteId} {...propiedades} />}
-            {vista === "sandbox" && <Laboratorio key={clienteId} {...propiedades} />}
+            {vista === "sandbox" && !esCliente && (
+              <Laboratorio key={clienteId} {...propiedades} />
+            )}
             {vista === "reporte" && <Reporte key={clienteId} {...propiedades} />}
+            {vista === "accesos" && !esCliente && <Accesos key={clienteId} {...propiedades} />}
           </>
         )}
-        {vista === "estado" && <Estado estado={estado} />}
+        {vista === "estado" && !esCliente && <Estado estado={estado} />}
       </main>
     </div>
   );

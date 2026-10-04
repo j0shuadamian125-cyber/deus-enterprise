@@ -5,7 +5,9 @@ expone lectura de leads, llamadas, bitacora, escalamientos, estrategias,
 patrones y aprobaciones.
 
 Autenticacion:
-- panel y operaciones: cabecera `X-Panel-Token` (HERMES_PANEL_TOKEN).
+- panel y operaciones: cabecera `X-Panel-Token`. Con HERMES_PANEL_TOKEN el rol
+  es operador (acceso completo); con un token de cliente emitido por el operador
+  el rol es cliente: solo las rutas de `RUTAS_CLIENTE` y solo sobre su tenant.
 - webhook de WhatsApp: firma `X-Twilio-Signature` (HERMES_URL_PUBLICA + Auth
   Token de Twilio); si la validacion esta desactivada se acepta el token de
   webhook como alternativa.
@@ -14,16 +16,20 @@ Autenticacion:
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import secrets
 import threading
 from collections.abc import Mapping
+from dataclasses import dataclass
 from hmac import compare_digest
-from typing import Protocol
+from typing import Annotated, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
 from .channels.whatsapp import FirmaInvalidaError
@@ -51,6 +57,59 @@ from .resilience import LimitadorTasa
 from .sandbox import ESCENARIOS, SandboxError, ejecutar_escenario, ejecutar_todos
 from .storage import AislamientoError
 from .strategies import EstrategiaError
+
+RUTAS_CLIENTE: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("GET", "/health"),
+        ("GET", "/v1/sesion"),
+        ("GET", "/v1/clientes/{cliente_id}"),
+        ("GET", "/v1/clientes/{cliente_id}/leads"),
+        ("GET", "/v1/clientes/{cliente_id}/leads/{lead_id}"),
+        ("GET", "/v1/clientes/{cliente_id}/hoja-leads"),
+        ("GET", "/v1/clientes/{cliente_id}/llamadas"),
+        ("GET", "/v1/clientes/{cliente_id}/reporte"),
+        ("GET", "/v1/clientes/{cliente_id}/reporte.pdf"),
+        ("GET", "/v1/clientes/{cliente_id}/resultados"),
+        ("GET", "/v1/clientes/{cliente_id}/escalamientos"),
+        ("GET", "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}"),
+        ("POST", "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}/intervenir"),
+        ("GET", "/v1/clientes/{cliente_id}/estrategias"),
+        ("POST", "/v1/clientes/{cliente_id}/estrategias/{estrategia_id}/activar"),
+        ("GET", "/v1/clientes/{cliente_id}/patrones"),
+        ("GET", "/v1/clientes/{cliente_id}/decisiones"),
+        ("POST", "/v1/clientes/{cliente_id}/decisiones/{decision_id}/aprobar"),
+        ("POST", "/v1/clientes/{cliente_id}/decisiones/{decision_id}/rechazar"),
+    }
+)
+"""Lista cerrada de lo que alcanza un token de cliente; todo lo demas responde 403."""
+
+DECISIONES_DE_CLIENTE = frozenset({"activar_estrategia", "cambio_de_estrategia"})
+
+
+@dataclass(frozen=True)
+class Principal:
+    rol: str
+    cliente_id: str | None = None
+
+    def firma(self, nombre: str) -> str:
+        """Quien resolvio una accion queda en la bitacora con su rol."""
+        if self.rol == "cliente":
+            return f"cliente:{self.cliente_id}/{nombre}"
+        return nombre
+
+
+def rol_actual(peticion: Request) -> Principal:
+    cliente_id = peticion.state.cliente_acceso
+    if cliente_id is not None:
+        return Principal(rol="cliente", cliente_id=cliente_id)
+    return Principal(rol="operador")
+
+
+RolActual = Annotated[Principal, Depends(rol_actual)]
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 class RespuestaAtencion(BaseModel):
@@ -133,10 +192,36 @@ def _a_respuesta(resultado: ResultadoAtencion, canal: Canal) -> RespuestaAtencio
 
 def crear_app(servicio: Servicio | None = None, config: Configuracion | None = None) -> FastAPI:
     servicio = servicio or construir_servicio(config)
+
+    def _cliente_de_token(token: str | None) -> str | None:
+        if not token:
+            return None
+        esperado = servicio.config.token_panel
+        if esperado and compare_digest(token, esperado):
+            return None
+        return servicio.almacen.cliente_de_acceso(_hash_token(token))
+
+    def control_de_rol(
+        peticion: Request, x_panel_token: str | None = Header(default=None)
+    ) -> None:
+        """Se aplica a todas las rutas: deny by default para el rol cliente."""
+        cliente_id = _cliente_de_token(x_panel_token)
+        peticion.state.cliente_acceso = cliente_id
+        if cliente_id is None:
+            return
+        ruta = peticion.scope.get("route")
+        if not isinstance(ruta, APIRoute) or (peticion.method, ruta.path) not in RUTAS_CLIENTE:
+            raise HTTPException(status_code=403, detail="Ruta no disponible para el rol cliente")
+        if peticion.path_params.get("cliente_id", cliente_id) != cliente_id:
+            raise HTTPException(
+                status_code=403, detail="El token de cliente no da acceso a otro tenant"
+            )
+
     app = FastAPI(
         title="HERMES",
         version="4.0",
         description="Modulo de ventas y atencion multicanal de DEUS",
+        dependencies=[Depends(control_de_rol)],
     )
     app.state.servicio = servicio
     limitador = LimitadorTasa(maximo=servicio.config.limite_webhook_por_minuto)
@@ -173,7 +258,9 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         if not recibido or not compare_digest(recibido, esperado):
             raise HTTPException(status_code=401, detail=f"Token invalido ({variable})")
 
-    def autorizar(x_panel_token: str | None = Header(default=None)) -> None:
+    def autorizar(peticion: Request, x_panel_token: str | None = Header(default=None)) -> None:
+        if peticion.state.cliente_acceso is not None:
+            return
         _exigir_token(x_panel_token, servicio.config.token_panel, "HERMES_PANEL_TOKEN")
 
     def autorizar_webhook(x_webhook_token: str | None = Header(default=None)) -> None:
@@ -227,6 +314,10 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             "token_webhook_configurado": bool(servicio.config.token_webhook),
         }
 
+    @app.get("/v1/sesion", dependencies=[Depends(autorizar)])
+    def sesion(principal: RolActual) -> dict:
+        return {"rol": principal.rol, "cliente_id": principal.cliente_id}
+
     # --- onboarding ----------------------------------------------------
     @app.post("/v1/onboarding", dependencies=[Depends(autorizar)])
     def onboarding(respuestas: RespuestasOnboarding) -> dict:
@@ -247,6 +338,33 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         if registro is None:
             raise HTTPException(status_code=404, detail="Cliente inexistente")
         return registro.model_dump(mode="json")
+
+    # --- accesos de cliente (solo operador) ------------------------------
+    @app.post(
+        "/v1/clientes/{cliente_id}/accesos",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def crear_acceso(cliente_id: str) -> dict:
+        """El token se devuelve una sola vez; en la base solo queda su hash."""
+        token = secrets.token_urlsafe(32)
+        acceso = servicio.almacen.crear_acceso(cliente_id, _hash_token(token))
+        return {**acceso, "token": token}
+
+    @app.get(
+        "/v1/clientes/{cliente_id}/accesos",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def accesos(cliente_id: str) -> list[dict]:
+        return servicio.almacen.listar_accesos(cliente_id)
+
+    @app.post(
+        "/v1/clientes/{cliente_id}/accesos/{acceso_id}/revocar",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def revocar_acceso(cliente_id: str, acceso_id: str) -> dict:
+        if not servicio.almacen.revocar_acceso(cliente_id, acceso_id):
+            raise HTTPException(status_code=404, detail="Acceso inexistente o ya revocado")
+        return {"acceso_id": acceso_id, "revocado": True}
 
     # --- webhooks por canal ----------------------------------------------
     @app.post("/v1/webhooks/whatsapp/{cliente_id}", response_model=RespuestaAtencion)
@@ -511,12 +629,17 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}/intervenir",
         dependencies=[Depends(autorizar), Depends(exigir_cliente)],
     )
-    def intervenir(cliente_id: str, escalamiento_id: str, peticion: IntervencionPeticion) -> dict:
+    def intervenir(
+        cliente_id: str,
+        escalamiento_id: str,
+        peticion: IntervencionPeticion,
+        principal: RolActual,
+    ) -> dict:
         try:
             registro, texto = servicio.hermes.resolver_escalamiento(
                 cliente_id=cliente_id,
                 escalamiento_id=escalamiento_id,
-                atendido_por=peticion.atendido_por,
+                atendido_por=principal.firma(peticion.atendido_por),
                 accion=peticion.accion,
                 respuesta=peticion.respuesta,
                 resultado=peticion.resultado,
@@ -671,26 +794,86 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             for decision in servicio.almacen.listar_decisiones(cliente_id=cliente_id, estado=estado)
         ]
 
-    @app.post("/v1/decisiones/{decision_id}/aprobar", dependencies=[Depends(autorizar)])
-    def aprobar(decision_id: str, peticion: AprobacionPeticion) -> dict:
+    def _aprobar(decision_id: str, por: str, canal: CanalConfirmacion) -> dict:
         try:
-            decision = servicio.gobernanza.aprobar(
-                decision_id, peticion.aprobado_por, peticion.canal_confirmacion
-            )
+            decision = servicio.gobernanza.aprobar(decision_id, por, canal)
         except GobernanzaError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         _ejecutar_pendiente(servicio, decision_id)
         return decision.model_dump(mode="json")
 
-    @app.post("/v1/decisiones/{decision_id}/rechazar", dependencies=[Depends(autorizar)])
-    def rechazar(decision_id: str, peticion: RechazoPeticion) -> dict:
+    def _rechazar(decision_id: str, por: str, motivo: str) -> dict:
         try:
-            decision = servicio.gobernanza.rechazar(
-                decision_id, peticion.rechazado_por, peticion.motivo
-            )
+            decision = servicio.gobernanza.rechazar(decision_id, por, motivo)
         except GobernanzaError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return decision.model_dump(mode="json")
+
+    def _exigir_decision_del_tenant(
+        cliente_id: str, decision_id: str, principal: Principal
+    ) -> None:
+        decision = servicio.almacen.obtener_decision(decision_id)
+        if decision is None or decision.cliente_id != cliente_id:
+            raise HTTPException(status_code=404, detail="Decision inexistente para ese cliente")
+        if (
+            principal.rol == "cliente"
+            and decision.payload.get("accion") not in DECISIONES_DE_CLIENTE
+        ):
+            raise HTTPException(
+                status_code=403, detail="El rol cliente solo resuelve decisiones de estrategia"
+            )
+
+    @app.post("/v1/decisiones/{decision_id}/aprobar", dependencies=[Depends(autorizar)])
+    def aprobar(decision_id: str, peticion: AprobacionPeticion) -> dict:
+        return _aprobar(decision_id, peticion.aprobado_por, peticion.canal_confirmacion)
+
+    @app.post("/v1/decisiones/{decision_id}/rechazar", dependencies=[Depends(autorizar)])
+    def rechazar(decision_id: str, peticion: RechazoPeticion) -> dict:
+        return _rechazar(decision_id, peticion.rechazado_por, peticion.motivo)
+
+    @app.get(
+        "/v1/clientes/{cliente_id}/decisiones",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def decisiones_del_tenant(
+        cliente_id: str,
+        principal: RolActual,
+        estado: str | None = None,
+    ) -> list[dict]:
+        lista = servicio.almacen.listar_decisiones(cliente_id=cliente_id, estado=estado)
+        if principal.rol == "cliente":
+            lista = [d for d in lista if d.payload.get("accion") in DECISIONES_DE_CLIENTE]
+        return [decision.model_dump(mode="json") for decision in lista]
+
+    @app.post(
+        "/v1/clientes/{cliente_id}/decisiones/{decision_id}/aprobar",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def aprobar_del_tenant(
+        cliente_id: str,
+        decision_id: str,
+        peticion: AprobacionPeticion,
+        principal: RolActual,
+    ) -> dict:
+        _exigir_decision_del_tenant(cliente_id, decision_id, principal)
+        # El cliente no puede declarar por si mismo la segunda confirmacion de Nivel 4.
+        canal = (
+            CanalConfirmacion.CHAT if principal.rol == "cliente" else peticion.canal_confirmacion
+        )
+        return _aprobar(decision_id, principal.firma(peticion.aprobado_por), canal)
+
+    @app.post(
+        "/v1/clientes/{cliente_id}/decisiones/{decision_id}/rechazar",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def rechazar_del_tenant(
+        cliente_id: str,
+        decision_id: str,
+        peticion: RechazoPeticion,
+        principal: RolActual,
+    ) -> dict:
+        _exigir_decision_del_tenant(cliente_id, decision_id, principal)
+        return _rechazar(decision_id, principal.firma(peticion.rechazado_por), peticion.motivo)
 
     @app.post("/v1/decisiones/caducar-nivel-4", dependencies=[Depends(autorizar)])
     def caducar() -> list[dict]:
