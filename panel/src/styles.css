@@ -235,6 +235,16 @@ tr:last-child td {
   min-width: 0;
 }
 
+.columnas > div {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1280px) {
+  .columnas {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .celda-lead {
   display: inline-block;
   max-width: 320px;
