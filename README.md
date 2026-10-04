@@ -37,6 +37,23 @@ uvicorn hermes.main:app --reload
 en vez de quedar abierta; para desarrollo local se abre con
 `HERMES_PERMITIR_SIN_TOKEN=true`.
 
+## Roles: operador y cliente
+
+- **Operador** (`X-Panel-Token: $HERMES_PANEL_TOKEN`): acceso completo, como siempre.
+- **Cliente** (`X-Panel-Token: <token de cliente>`): solo su propio tenant. Puede leer
+  pipeline, leads con su historial, hoja de leads, llamadas, reporte (JSON y PDF),
+  resultados, escalamientos y patrones; intervenir en sus escalamientos; y aprobar,
+  rechazar y activar las estrategias propuestas para su tenant
+  (`activar_estrategia`, `cambio_de_estrategia`).
+- La lista de rutas del cliente es cerrada (`RUTAS_CLIENTE` en `hermes/api.py`): cualquier
+  otra ruta, incluidas `/v1/clientes`, `/v1/decisiones`, `/v1/memoria`, onboarding,
+  webhooks, sandbox, seguimiento/cierre y creacion de estrategias, responde `403`, igual
+  que cualquier `{cliente_id}` que no sea el suyo. Un token desconocido o revocado da `401`.
+- El operador emite el token con `POST /v1/clientes/{cliente_id}/accesos` (o desde la
+  vista *Accesos* del panel). Se devuelve **una sola vez**; HERMES guarda solo su hash
+  SHA-256. `POST /v1/clientes/{cliente_id}/accesos/{acceso_id}/revocar` lo invalida.
+- Lo que resuelve un cliente queda en la bitacora como `cliente:<cliente_id>/<nombre>`.
+
 ## Variables de entorno
 
 | Variable | Para que sirve |
@@ -85,6 +102,9 @@ Ninguna credencial se guarda en el repositorio.
 | `GET /v1/clientes/{cliente_id}/patrones`, `POST .../patrones/detectar` | Patrones del tenant y propuesta de cambio |
 | `GET /v1/sandbox/escenarios`, `POST /v1/clientes/{cliente_id}/sandbox[/todos]` | Laboratorio de pruebas |
 | `GET /v1/estado` | Que integraciones estan realmente configuradas |
+| `GET /v1/sesion` | Rol de quien llama (`operador` o `cliente` con su `cliente_id`) |
+| `GET/POST /v1/clientes/{cliente_id}/accesos`, `POST .../accesos/{id}/revocar` | Tokens de cliente (solo operador) |
+| `GET /v1/clientes/{cliente_id}/decisiones`, `POST .../decisiones/{id}/aprobar\|rechazar` | Bitacora del tenant (el cliente solo ve y resuelve decisiones de estrategia) |
 | `GET /v1/decisiones` | Bitacora, filtrable por cliente y estado |
 | `POST /v1/decisiones/{id}/aprobar` | Aprobar (Nivel 4 exige segunda confirmacion) |
 | `POST /v1/decisiones/{id}/rechazar` | Rechazar |
@@ -113,8 +133,10 @@ exige registrar la jurisdiccion antes de autorizarla.
 
 ## Panel de operacion
 
-El panel es una app React (Vite) en `panel/`. Se autentica con el mismo
-`X-Panel-Token`, que guarda solo en `sessionStorage`; **ninguna credencial de
+El panel es una app React (Vite) en `panel/`. Se autentica con `X-Panel-Token`
+(de operador o de cliente), que guarda solo en `sessionStorage`. Con token de
+cliente oculta el selector de tenants, Sandbox, Accesos e Integraciones, pero la
+restriccion real la impone la API; **ninguna credencial de
 proveedor llega al navegador** y el panel nunca llama a un LLM directamente.
 
 ```bash
