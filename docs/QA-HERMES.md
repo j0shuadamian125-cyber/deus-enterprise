@@ -59,7 +59,7 @@ Ningun canal externo puede declararse funcional: solo existe la implementacion l
 - Idempotencia y limite de tasa coordinados solo dentro de un proceso.
 - Escala no medida: no se afirma ninguna cifra de concurrencia.
 - PDF sin graficos.
-- Solo dos roles: operador de DEUS y cliente (dueño del tenant). No hay roles para empleados o vendedores del cliente.
+- Tres roles: operador de DEUS, cliente (dueño del tenant) y empleado del cliente, limitado a la cola de intervencion humana de su tenant. No hay roles adicionales (p. ej. vendedores con acceso al pipeline).
 - El token de cliente viaja en cabecera: en produccion exige HTTPS.
 
 ## 5. Requisitos para una prueba controlada de WhatsApp

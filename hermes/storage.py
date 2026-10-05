@@ -166,9 +166,15 @@ class Almacen:
                 for fila in self._conexion.execute("PRAGMA table_info(accesos_cliente)")
             }
             if "rol" not in columnas:
-                self._conexion.execute(
-                    "ALTER TABLE accesos_cliente ADD COLUMN rol TEXT NOT NULL DEFAULT 'cliente'"
-                )
+                try:
+                    self._conexion.execute(
+                        "ALTER TABLE accesos_cliente ADD COLUMN rol TEXT NOT NULL "
+                        "DEFAULT 'cliente'"
+                    )
+                except sqlite3.OperationalError as exc:
+                    # Otro proceso (API o worker) pudo migrar la misma base a la vez.
+                    if "duplicate column" not in str(exc):
+                        raise
             self._conexion.commit()
 
     def cerrar(self) -> None:
