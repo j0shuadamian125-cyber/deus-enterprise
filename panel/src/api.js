@@ -74,7 +74,8 @@ export const api = {
   clientes: () => peticion("/v1/clientes"),
   cliente: (id) => peticion(`/v1/clientes/${id}`),
   accesos: (id) => peticion(`/v1/clientes/${id}/accesos`),
-  crearAcceso: (id) => peticion(`/v1/clientes/${id}/accesos`, { metodo: "POST" }),
+  crearAcceso: (id, rol) =>
+    peticion(`/v1/clientes/${id}/accesos`, { metodo: "POST", cuerpo: { rol } }),
   revocarAcceso: (id, accesoId) =>
     peticion(`/v1/clientes/${id}/accesos/${accesoId}/revocar`, { metodo: "POST" }),
   leads: (id) => peticion(`/v1/clientes/${id}/leads`),

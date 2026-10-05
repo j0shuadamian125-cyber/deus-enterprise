@@ -754,6 +754,7 @@ export function Accesos({ clienteId, cliente, alError }) {
   const [accesos, setAccesos] = useState([]);
   const [nuevo, setNuevo] = useState(null);
   const [generando, setGenerando] = useState(false);
+  const [rol, setRol] = useState("cliente");
 
   const cargar = () => api.accesos(clienteId).then(setAccesos).catch(alError);
   useEffect(() => {
@@ -766,11 +767,16 @@ export function Accesos({ clienteId, cliente, alError }) {
     <>
       <h2>Accesos del cliente</h2>
       <p className="tenue">
-        Un token de cliente sólo ve el tenant de {cliente?.nombre_negocio || clienteId}: pipeline,
-        leads, reporte, intervención humana y aprobación de estrategias. Se muestra una sola vez;
-        HERMES guarda únicamente su hash.
+        Los tokens sólo ven el tenant de {cliente?.nombre_negocio || clienteId}. Cliente (jefe):
+        pipeline, leads, reporte, intervención humana y aprobación de estrategias. Empleado:
+        únicamente la cola de intervención humana. Se muestran una sola vez; HERMES guarda
+        únicamente su hash.
       </p>
       <div className="fila">
+        <select value={rol} onChange={(e) => setRol(e.target.value)} style={{ maxWidth: 190 }}>
+          <option value="cliente">Cliente (jefe)</option>
+          <option value="empleado">Empleado</option>
+        </select>
         <button
           className="principal"
           disabled={generando || Boolean(nuevo)}
@@ -778,7 +784,7 @@ export function Accesos({ clienteId, cliente, alError }) {
           onClick={() => {
             setGenerando(true);
             api
-              .crearAcceso(clienteId)
+              .crearAcceso(clienteId, rol)
               .then((acceso) => {
                 setNuevo(acceso);
                 cargar();
@@ -787,12 +793,12 @@ export function Accesos({ clienteId, cliente, alError }) {
               .finally(() => setGenerando(false));
           }}
         >
-          Generar token de cliente
+          Generar token de {rol === "empleado" ? "empleado" : "cliente"}
         </button>
       </div>
       {nuevo && (
         <div className="aviso">
-          Copia el token de {nuevo.acceso_id} ahora, no se volverá a mostrar:{" "}
+          Copia el token de {nuevo.rol} {nuevo.acceso_id} ahora, no se volverá a mostrar:{" "}
           <code>{nuevo.token}</code>{" "}
           <button onClick={() => setNuevo(null)}>Ya lo entregué</button>
         </div>
@@ -801,6 +807,7 @@ export function Accesos({ clienteId, cliente, alError }) {
         <thead>
           <tr>
             <th>Acceso</th>
+            <th>Rol</th>
             <th>Creado</th>
             <th>Estado</th>
             <th />
@@ -810,6 +817,7 @@ export function Accesos({ clienteId, cliente, alError }) {
           {accesos.map((acceso) => (
             <tr key={acceso.acceso_id}>
               <td>{acceso.acceso_id}</td>
+              <td>{acceso.rol}</td>
               <td>{acceso.creado_en}</td>
               <td>
                 <span className={`etiqueta ${acceso.revocado_en ? "mal" : "ok"}`}>
@@ -837,7 +845,7 @@ export function Accesos({ clienteId, cliente, alError }) {
           ))}
           {accesos.length === 0 && (
             <tr>
-              <td colSpan={4} className="tenue">
+              <td colSpan={5} className="tenue">
                 Este cliente no tiene accesos emitidos.
               </td>
             </tr>

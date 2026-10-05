@@ -32,6 +32,9 @@ const VISTAS_CLIENTE = [
   ["reporte", "Reporte"],
 ];
 
+// Reflejo de RUTAS_EMPLEADO: solo la cola de intervencion humana.
+const VISTAS_EMPLEADO = [["bandeja", "Intervención"]];
+
 function Acceso({ alEntrar }) {
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
@@ -88,6 +91,13 @@ export default function App() {
       .then(async (actual) => {
         if (!vigente) return;
         setSesion(actual);
+        if (actual.rol === "empleado") {
+          setClientes([{ cliente_id: actual.cliente_id, nombre_negocio: actual.nombre_negocio }]);
+          setClientesCargados(true);
+          setClienteId(actual.cliente_id);
+          setVista("bandeja");
+          return;
+        }
         if (actual.rol === "cliente") {
           const propio = await api.cliente(actual.cliente_id);
           if (!vigente) return;
@@ -117,7 +127,9 @@ export default function App() {
   if (!autenticado) return <Acceso alEntrar={() => setAutenticado(true)} />;
 
   const esCliente = sesion?.rol === "cliente";
-  const vistas = esCliente ? VISTAS_CLIENTE : VISTAS_OPERADOR;
+  const esEmpleado = sesion?.rol === "empleado";
+  const vistas = esEmpleado ? VISTAS_EMPLEADO : esCliente ? VISTAS_CLIENTE : VISTAS_OPERADOR;
+  const permitida = (clave) => vistas.some(([c]) => c === clave);
   const cliente = clientes.find((c) => c.cliente_id === clienteId);
   const propiedades = { clienteId, cliente, alError, esCliente };
 
@@ -125,7 +137,7 @@ export default function App() {
     <div className="disposicion">
       <aside className="lateral">
         <h1 className="marca">HERMES</h1>
-        {esCliente ? (
+        {esCliente || esEmpleado ? (
           <p>{cliente?.nombre_negocio || "Cargando…"}</p>
         ) : (
           <select value={clienteId} onChange={(e) => setClienteId(e.target.value)}>
@@ -185,18 +197,28 @@ export default function App() {
           )
         ) : (
           <>
-            {vista === "pipeline" && <Pipeline key={clienteId} {...propiedades} />}
+            {vista === "pipeline" && permitida("pipeline") && (
+              <Pipeline key={clienteId} {...propiedades} />
+            )}
             {vista === "bandeja" && <Bandeja key={clienteId} {...propiedades} />}
-            {vista === "estrategias" && <Estrategias key={clienteId} {...propiedades} />}
-            {vista === "decisiones" && <Decisiones key={clienteId} {...propiedades} />}
-            {vista === "sandbox" && !esCliente && (
+            {vista === "estrategias" && permitida("estrategias") && (
+              <Estrategias key={clienteId} {...propiedades} />
+            )}
+            {vista === "decisiones" && permitida("decisiones") && (
+              <Decisiones key={clienteId} {...propiedades} />
+            )}
+            {vista === "sandbox" && permitida("sandbox") && (
               <Laboratorio key={clienteId} {...propiedades} />
             )}
-            {vista === "reporte" && <Reporte key={clienteId} {...propiedades} />}
-            {vista === "accesos" && !esCliente && <Accesos key={clienteId} {...propiedades} />}
+            {vista === "reporte" && permitida("reporte") && (
+              <Reporte key={clienteId} {...propiedades} />
+            )}
+            {vista === "accesos" && permitida("accesos") && (
+              <Accesos key={clienteId} {...propiedades} />
+            )}
           </>
         )}
-        {vista === "estado" && !esCliente && <Estado estado={estado} />}
+        {vista === "estado" && permitida("estado") && <Estado estado={estado} />}
       </main>
     </div>
   );

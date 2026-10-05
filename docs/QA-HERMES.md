@@ -30,7 +30,7 @@ termino con **7 comprobaciones pasadas**; ese resultado se conserva sin modifica
 | 6 | Concurrencia | Los webhooks ejecutaban trabajo sincrono (SQLite, HTTP saliente) dentro del bucle async, bloqueando al resto | Alto | Corregido con `run_in_threadpool` |
 | 7 | Abuso | `LimitadorTasa` existia pero ningun endpoint lo usaba | Alto | Corregido: limite por tenant y canal (`HERMES_LIMITE_WEBHOOK`, `429`) |
 | 8 | Persistencia | SQLite sin WAL ni `busy_timeout`: el worker IMAP en otro proceso provoca `database is locked` | Medio | Corregido (WAL + `busy_timeout=5000`) |
-| 9 | Autorizacion | `/v1/clientes`, `/v1/decisiones` y `/v1/memoria` son vistas globales del operador de DEUS, no tenant-scoped; hoy las protege el mismo token de panel | Medio | Corregido: rol cliente con token por tenant (hash SHA-256, revocable), lista cerrada `RUTAS_CLIENTE` y 403 en todo lo demas; `tests/test_roles.py` recorre todas las rutas |
+| 9 | Autorizacion | `/v1/clientes`, `/v1/decisiones` y `/v1/memoria` son vistas globales del operador de DEUS, no tenant-scoped; hoy las protege el mismo token de panel | Medio | Corregido: rol cliente con token por tenant (hash SHA-256, revocable), lista cerrada `RUTAS_CLIENTE` y 403 en todo lo demas; rol empleado limitado a la cola de intervencion (`RUTAS_EMPLEADO`); `tests/test_roles.py` recorre todas las rutas para operador, cliente y empleado |
 | 10 | Escala | Candado de idempotencia y limite de tasa son **por proceso**; con varias instancias del API no coordinan | Medio | Documentado como limitacion |
 | 11 | Reportes | El PDF no incluye graficos | Bajo | Pendiente (mejora) |
 
