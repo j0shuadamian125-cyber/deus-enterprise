@@ -128,6 +128,14 @@ CREATE TABLE IF NOT EXISTS resultados (
     datos TEXT NOT NULL,
     PRIMARY KEY (cliente_id, resultado_id)
 );
+CREATE TABLE IF NOT EXISTS accesos_cliente (
+    acceso_id TEXT PRIMARY KEY,
+    cliente_id TEXT NOT NULL,
+    hash_token TEXT NOT NULL UNIQUE,
+    creado_en TEXT NOT NULL,
+    revocado_en TEXT,
+    rol TEXT NOT NULL DEFAULT 'cliente'
+);
 """
 
 
@@ -153,6 +161,20 @@ class Almacen:
                 self._conexion.execute("PRAGMA journal_mode=WAL")
             self._conexion.execute("PRAGMA busy_timeout=5000")
             self._conexion.executescript(ESQUEMA)
+            columnas = {
+                fila["name"]
+                for fila in self._conexion.execute("PRAGMA table_info(accesos_cliente)")
+            }
+            if "rol" not in columnas:
+                try:
+                    self._conexion.execute(
+                        "ALTER TABLE accesos_cliente ADD COLUMN rol TEXT NOT NULL "
+                        "DEFAULT 'cliente'"
+                    )
+                except sqlite3.OperationalError as exc:
+                    # Otro proceso (API o worker) pudo migrar la misma base a la vez.
+                    if "duplicate column" not in str(exc):
+                        raise
             self._conexion.commit()
 
     def cerrar(self) -> None:
@@ -200,6 +222,57 @@ class Almacen:
         """Vista global: exclusiva del operador de DEUS (Seccion 1.4)."""
         filas = self._consultar("SELECT datos FROM clientes")
         return [Cliente.model_validate_json(f["datos"]) for f in filas]
+
+    # --- accesos de cliente -------------------------------------------
+    def crear_acceso(
+        self, cliente_id: str, hash_token: str, rol: str = "cliente"
+    ) -> dict[str, Any]:
+        """Solo se guarda el hash: el token en claro se entrega una vez y no se conserva."""
+        _exigir_cliente(cliente_id)
+        acceso = {
+            "acceso_id": self.siguiente_folio("acceso", "ACC"),
+            "cliente_id": cliente_id,
+            "rol": rol,
+            "creado_en": ahora().isoformat(),
+            "revocado_en": None,
+        }
+        self._ejecutar(
+            "INSERT INTO accesos_cliente (acceso_id, cliente_id, hash_token, creado_en, rol) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (acceso["acceso_id"], cliente_id, hash_token, acceso["creado_en"], rol),
+        )
+        return acceso
+
+    def acceso_de_hash(self, hash_token: str) -> tuple[str, str] | None:
+        """(cliente_id, rol) de un acceso vigente."""
+        filas = self._consultar(
+            "SELECT cliente_id, rol FROM accesos_cliente "
+            "WHERE hash_token = ? AND revocado_en IS NULL",
+            (hash_token,),
+        )
+        return (filas[0]["cliente_id"], filas[0]["rol"]) if filas else None
+
+    def cliente_de_acceso(self, hash_token: str) -> str | None:
+        acceso = self.acceso_de_hash(hash_token)
+        return acceso[0] if acceso else None
+
+    def listar_accesos(self, cliente_id: str) -> list[dict[str, Any]]:
+        _exigir_cliente(cliente_id)
+        filas = self._consultar(
+            "SELECT acceso_id, cliente_id, rol, creado_en, revocado_en FROM accesos_cliente "
+            "WHERE cliente_id = ? ORDER BY creado_en ASC",
+            (cliente_id,),
+        )
+        return [dict(f) for f in filas]
+
+    def revocar_acceso(self, cliente_id: str, acceso_id: str) -> bool:
+        _exigir_cliente(cliente_id)
+        cursor = self._ejecutar(
+            "UPDATE accesos_cliente SET revocado_en = ? "
+            "WHERE cliente_id = ? AND acceso_id = ? AND revocado_en IS NULL",
+            (ahora().isoformat(), cliente_id, acceso_id),
+        )
+        return cursor.rowcount > 0
 
     # --- leads --------------------------------------------------------
     def guardar_lead(self, lead: Lead) -> Lead:
