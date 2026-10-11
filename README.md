@@ -37,7 +37,7 @@ uvicorn hermes.main:app --reload
 en vez de quedar abierta; para desarrollo local se abre con
 `HERMES_PERMITIR_SIN_TOKEN=true`.
 
-## Roles: operador y cliente
+## Roles: operador, cliente y empleado
 
 - **Operador** (`X-Panel-Token: $HERMES_PANEL_TOKEN`): acceso completo, como siempre.
 - **Cliente** (`X-Panel-Token: <token de cliente>`): solo su propio tenant. Puede leer
@@ -49,10 +49,18 @@ en vez de quedar abierta; para desarrollo local se abre con
   otra ruta, incluidas `/v1/clientes`, `/v1/decisiones`, `/v1/memoria`, onboarding,
   webhooks, sandbox, seguimiento/cierre y creacion de estrategias, responde `403`, igual
   que cualquier `{cliente_id}` que no sea el suyo. Un token desconocido o revocado da `401`.
-- El operador emite el token con `POST /v1/clientes/{cliente_id}/accesos` (o desde la
-  vista *Accesos* del panel). Se devuelve **una sola vez**; HERMES guarda solo su hash
-  SHA-256. `POST /v1/clientes/{cliente_id}/accesos/{acceso_id}/revocar` lo invalida.
-- Lo que resuelve un cliente queda en la bitacora como `cliente:<cliente_id>/<nombre>`.
+- **Empleado** (`X-Panel-Token: <token de empleado>`): solo la cola de intervencion humana
+  de su tenant (`RUTAS_EMPLEADO`): listar escalamientos, ver el caso con su conversacion y
+  la recomendacion de HERMES, e intervenir (aprobar la sugerida, enviar editada o tomar).
+  Pipeline, leads, reportes, resultados, estrategias, patrones, decisiones y
+  `GET /v1/clientes/{cliente_id}` responden `403`; el nombre del negocio llega por
+  `GET /v1/sesion`.
+- El operador emite el token con `POST /v1/clientes/{cliente_id}/accesos` y cuerpo opcional
+  `{"rol": "cliente" | "empleado"}` (por omision `cliente`), o desde la vista *Accesos* del
+  panel. Se devuelve **una sola vez**; HERMES guarda solo su hash SHA-256.
+  `POST /v1/clientes/{cliente_id}/accesos/{acceso_id}/revocar` lo invalida.
+- Lo que resuelve un cliente o empleado queda en la bitacora como
+  `cliente:<cliente_id>/<nombre>` o `empleado:<cliente_id>/<nombre>`.
 
 ## Variables de entorno
 
@@ -102,8 +110,8 @@ Ninguna credencial se guarda en el repositorio.
 | `GET /v1/clientes/{cliente_id}/patrones`, `POST .../patrones/detectar` | Patrones del tenant y propuesta de cambio |
 | `GET /v1/sandbox/escenarios`, `POST /v1/clientes/{cliente_id}/sandbox[/todos]` | Laboratorio de pruebas |
 | `GET /v1/estado` | Que integraciones estan realmente configuradas |
-| `GET /v1/sesion` | Rol de quien llama (`operador` o `cliente` con su `cliente_id`) |
-| `GET/POST /v1/clientes/{cliente_id}/accesos`, `POST .../accesos/{id}/revocar` | Tokens de cliente (solo operador) |
+| `GET /v1/sesion` | Rol de quien llama (`operador`, `cliente` o `empleado`), su `cliente_id` y `nombre_negocio` |
+| `GET/POST /v1/clientes/{cliente_id}/accesos`, `POST .../accesos/{id}/revocar` | Tokens de cliente o empleado (solo operador) |
 | `GET /v1/clientes/{cliente_id}/decisiones`, `POST .../decisiones/{id}/aprobar\|rechazar` | Bitacora del tenant (el cliente solo ve y resuelve decisiones de estrategia) |
 | `GET /v1/decisiones` | Bitacora, filtrable por cliente y estado |
 | `POST /v1/decisiones/{id}/aprobar` | Aprobar (Nivel 4 exige segunda confirmacion) |
@@ -134,8 +142,9 @@ exige registrar la jurisdiccion antes de autorizarla.
 ## Panel de operacion
 
 El panel es una app React (Vite) en `panel/`. Se autentica con `X-Panel-Token`
-(de operador o de cliente), que guarda solo en `sessionStorage`. Con token de
-cliente oculta el selector de tenants, Sandbox, Accesos e Integraciones, pero la
+(de operador, cliente o empleado), que guarda solo en `sessionStorage`. Con token de
+cliente oculta el selector de tenants, Sandbox, Accesos e Integraciones; con token de
+empleado solo muestra Intervención. La
 restriccion real la impone la API; **ninguna credencial de
 proveedor llega al navegador** y el panel nunca llama a un LLM directamente.
 

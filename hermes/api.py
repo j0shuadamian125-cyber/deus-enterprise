@@ -7,7 +7,8 @@ patrones y aprobaciones.
 Autenticacion:
 - panel y operaciones: cabecera `X-Panel-Token`. Con HERMES_PANEL_TOKEN el rol
   es operador (acceso completo); con un token de cliente emitido por el operador
-  el rol es cliente: solo las rutas de `RUTAS_CLIENTE` y solo sobre su tenant.
+  el rol es cliente: solo las rutas de `RUTAS_CLIENTE` y solo sobre su tenant;
+  con un token de empleado, solo la cola de intervencion humana (`RUTAS_EMPLEADO`).
 - webhook de WhatsApp: firma `X-Twilio-Signature` (HERMES_URL_PUBLICA + Auth
   Token de Twilio); si la validacion esta desactivada se acepta el token de
   webhook como alternativa.
@@ -23,7 +24,7 @@ import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hmac import compare_digest
-from typing import Annotated, Protocol
+from typing import Annotated, Literal, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -83,6 +84,22 @@ RUTAS_CLIENTE: frozenset[tuple[str, str]] = frozenset(
 )
 """Lista cerrada de lo que alcanza un token de cliente; todo lo demas responde 403."""
 
+RUTAS_EMPLEADO: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("GET", "/health"),
+        ("GET", "/v1/sesion"),
+        ("GET", "/v1/clientes/{cliente_id}/escalamientos"),
+        ("GET", "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}"),
+        ("POST", "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}/intervenir"),
+    }
+)
+"""Un empleado del cliente solo atiende la cola de intervencion humana de su tenant."""
+
+RUTAS_POR_ROL: dict[str, frozenset[tuple[str, str]]] = {
+    "cliente": RUTAS_CLIENTE,
+    "empleado": RUTAS_EMPLEADO,
+}
+
 DECISIONES_DE_CLIENTE = frozenset({"activar_estrategia", "cambio_de_estrategia"})
 
 
@@ -93,16 +110,17 @@ class Principal:
 
     def firma(self, nombre: str) -> str:
         """Quien resolvio una accion queda en la bitacora con su rol."""
-        if self.rol == "cliente":
-            return f"cliente:{self.cliente_id}/{nombre}"
+        if self.cliente_id is not None:
+            return f"{self.rol}:{self.cliente_id}/{nombre}"
         return nombre
 
 
+OPERADOR = Principal(rol="operador")
+
+
 def rol_actual(peticion: Request) -> Principal:
-    cliente_id = peticion.state.cliente_acceso
-    if cliente_id is not None:
-        return Principal(rol="cliente", cliente_id=cliente_id)
-    return Principal(rol="operador")
+    acceso: Principal | None = peticion.state.acceso
+    return acceso or OPERADOR
 
 
 RolActual = Annotated[Principal, Depends(rol_actual)]
@@ -139,6 +157,10 @@ class AprobacionPeticion(BaseModel):
 class RechazoPeticion(BaseModel):
     rechazado_por: str
     motivo: str = ""
+
+
+class AccesoPeticion(BaseModel):
+    rol: Literal["cliente", "empleado"] = "cliente"
 
 
 class IntervencionPeticion(BaseModel):
@@ -193,7 +215,7 @@ def _a_respuesta(resultado: ResultadoAtencion, canal: Canal) -> RespuestaAtencio
 def crear_app(servicio: Servicio | None = None, config: Configuracion | None = None) -> FastAPI:
     servicio = servicio or construir_servicio(config)
 
-    def _cliente_de_token(token: str | None) -> str | None:
+    def _acceso_de_token(token: str | None) -> Principal | None:
         if not token:
             return None
         esperado = servicio.config.token_panel
@@ -201,22 +223,28 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             return None
         if esperado and compare_digest(token, esperado):
             return None
-        return servicio.almacen.cliente_de_acceso(_hash_token(token))
+        acceso = servicio.almacen.acceso_de_hash(_hash_token(token))
+        if acceso is None or acceso[1] not in RUTAS_POR_ROL:
+            return None
+        return Principal(rol=acceso[1], cliente_id=acceso[0])
 
     def control_de_rol(
         peticion: Request, x_panel_token: str | None = Header(default=None)
     ) -> None:
-        """Se aplica a todas las rutas: deny by default para el rol cliente."""
-        cliente_id = _cliente_de_token(x_panel_token)
-        peticion.state.cliente_acceso = cliente_id
-        if cliente_id is None:
+        """Se aplica a todas las rutas: deny by default para los roles de tenant."""
+        acceso = _acceso_de_token(x_panel_token)
+        peticion.state.acceso = acceso
+        if acceso is None:
             return
         ruta = peticion.scope.get("route")
-        if not isinstance(ruta, APIRoute) or (peticion.method, ruta.path) not in RUTAS_CLIENTE:
-            raise HTTPException(status_code=403, detail="Ruta no disponible para el rol cliente")
-        if peticion.path_params.get("cliente_id", cliente_id) != cliente_id:
+        permitidas = RUTAS_POR_ROL[acceso.rol]
+        if not isinstance(ruta, APIRoute) or (peticion.method, ruta.path) not in permitidas:
             raise HTTPException(
-                status_code=403, detail="El token de cliente no da acceso a otro tenant"
+                status_code=403, detail=f"Ruta no disponible para el rol {acceso.rol}"
+            )
+        if peticion.path_params.get("cliente_id", acceso.cliente_id) != acceso.cliente_id:
+            raise HTTPException(
+                status_code=403, detail=f"El token de {acceso.rol} no da acceso a otro tenant"
             )
 
     app = FastAPI(
@@ -261,7 +289,7 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             raise HTTPException(status_code=401, detail=f"Token invalido ({variable})")
 
     def autorizar(peticion: Request, x_panel_token: str | None = Header(default=None)) -> None:
-        if peticion.state.cliente_acceso is not None:
+        if peticion.state.acceso is not None:
             return
         _exigir_token(x_panel_token, servicio.config.token_panel, "HERMES_PANEL_TOKEN")
 
@@ -318,7 +346,15 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
 
     @app.get("/v1/sesion", dependencies=[Depends(autorizar)])
     def sesion(principal: RolActual) -> dict:
-        return {"rol": principal.rol, "cliente_id": principal.cliente_id}
+        nombre = None
+        if principal.cliente_id is not None:
+            registro = servicio.almacen.obtener_cliente(principal.cliente_id)
+            nombre = registro.nombre_negocio if registro else None
+        return {
+            "rol": principal.rol,
+            "cliente_id": principal.cliente_id,
+            "nombre_negocio": nombre,
+        }
 
     # --- onboarding ----------------------------------------------------
     @app.post("/v1/onboarding", dependencies=[Depends(autorizar)])
@@ -341,15 +377,16 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             raise HTTPException(status_code=404, detail="Cliente inexistente")
         return registro.model_dump(mode="json")
 
-    # --- accesos de cliente (solo operador) ------------------------------
+    # --- accesos de cliente y empleado (solo operador) --------------------
     @app.post(
         "/v1/clientes/{cliente_id}/accesos",
         dependencies=[Depends(autorizar), Depends(exigir_cliente)],
     )
-    def crear_acceso(cliente_id: str) -> dict:
+    def crear_acceso(cliente_id: str, peticion: AccesoPeticion | None = None) -> dict:
         """El token se devuelve una sola vez; en la base solo queda su hash."""
+        rol = peticion.rol if peticion else "cliente"
         token = secrets.token_urlsafe(32)
-        acceso = servicio.almacen.crear_acceso(cliente_id, _hash_token(token))
+        acceso = servicio.almacen.crear_acceso(cliente_id, _hash_token(token), rol)
         return {**acceso, "token": token}
 
     @app.get(
