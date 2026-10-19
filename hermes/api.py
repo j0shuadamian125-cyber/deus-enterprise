@@ -508,9 +508,10 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
                     proveedor=evento.metadatos.get("proveedor"),
                     call_sid=evento_id,
                 )
+                estado = EstadoEntrega.PENDIENTE if _hay_que_entregar(atencion) else None
                 cuerpo = {
                     "llamada": llamada.model_dump(mode="json"),
-                    "atencion": _a_respuesta(atencion, Canal.LLAMADA, None).model_dump(
+                    "atencion": _a_respuesta(atencion, Canal.LLAMADA, estado).model_dump(
                         mode="json"
                     ),
                 }

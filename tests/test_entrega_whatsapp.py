@@ -296,3 +296,21 @@ def test_dry_run_deja_la_entrega_pendiente(servicio_real: Servicio):
     ).json()
 
     assert cuerpo["estado_entrega"] == "pendiente"
+
+
+def test_webhook_llamada_informa_la_respuesta_pendiente(servicio_real: Servicio):
+    http = TestClient(crear_app(servicio_real))
+
+    cuerpo = http.post(
+        "/v1/webhooks/llamada/cli_001",
+        json={"customer_number": "+5215550002", "transcript": "Quiero cotizacion"},
+    ).json()
+
+    [lead] = servicio_real.almacen.listar_leads("cli_001")
+    salientes = [
+        m
+        for m in servicio_real.almacen.historial("cli_001", lead.lead_id)
+        if m.direccion == "saliente"
+    ]
+    assert salientes[-1].estado_entrega == EstadoEntrega.PENDIENTE
+    assert cuerpo["atencion"]["estado_entrega"] == "pendiente"
