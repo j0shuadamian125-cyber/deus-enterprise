@@ -24,7 +24,15 @@ from ..resilience import redactar, reintentar
 
 
 class EnvioError(RuntimeError):
-    pass
+    """`reintentable=False` cuando Twilio rechaza la peticion (4xx): repetirla no cambia nada."""
+
+    def __init__(self, mensaje: str, reintentable: bool = True) -> None:
+        super().__init__(mensaje)
+        self.reintentable = reintentable
+
+
+def es_reintentable(exc: Exception) -> bool:
+    return not isinstance(exc, EnvioError) or exc.reintentable
 
 
 class FirmaInvalidaError(RuntimeError):
@@ -101,7 +109,11 @@ class AdaptadorWhatsApp:
     def enviar(self, destino: str, texto: str) -> dict:
         if not self.configurado:
             raise EnvioError("Faltan credenciales de Twilio (TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM)")
-        return reintentar("twilio.messages", lambda: self._enviar_una_vez(destino, texto))
+        return reintentar(
+            "twilio.messages",
+            lambda: self._enviar_una_vez(destino, texto),
+            reintentable=es_reintentable,
+        )
 
     def _enviar_una_vez(self, destino: str, texto: str) -> dict:
         datos = urlencode(
@@ -126,12 +138,16 @@ class AdaptadorWhatsApp:
                 cuerpo = json.loads(respuesta.read().decode("utf-8"))
         except HTTPError as exc:
             detalle = exc.read().decode("utf-8", "ignore")[:300]
-            raise EnvioError(f"Twilio respondio {exc.code}: {redactar(detalle)}") from None
+            raise EnvioError(
+                f"Twilio respondio {exc.code}: {redactar(detalle)}",
+                reintentable=exc.code >= 500,
+            ) from None
         except Exception as exc:  # noqa: BLE001 - red, DNS, timeout
             raise EnvioError(f"Fallo de red hacia Twilio: {redactar(str(exc))}") from None
         if cuerpo.get("error_code"):
             raise EnvioError(
                 f"Twilio rechazo el mensaje ({cuerpo.get('error_code')}): "
-                f"{cuerpo.get('error_message', '')}"
+                f"{cuerpo.get('error_message', '')}",
+                reintentable=False,
             )
         return cuerpo

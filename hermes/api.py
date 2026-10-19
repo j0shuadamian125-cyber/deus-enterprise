@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from hmac import compare_digest
 from typing import Annotated, Literal, Protocol
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -126,6 +126,9 @@ def rol_actual(peticion: Request) -> Principal:
 RolActual = Annotated[Principal, Depends(rol_actual)]
 
 
+TWIML_VACIO = '<?xml version="1.0" encoding="UTF-8"?><Response/>'
+
+
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -141,7 +144,7 @@ class RespuestaAtencion(BaseModel):
     nivel: int
     estado_decision: str
     respuesta: str | None
-    enviada: bool
+    estado_entrega: EstadoEntrega | None = None
     motivo: str = ""
     requiere_humano: bool = False
     escalamiento_id: str | None = None
@@ -189,7 +192,9 @@ class SandboxPeticion(BaseModel):
     contacto: str | None = None
 
 
-def _a_respuesta(resultado: ResultadoAtencion, canal: Canal) -> RespuestaAtencion:
+def _a_respuesta(
+    resultado: ResultadoAtencion, canal: Canal, estado_entrega: EstadoEntrega | None
+) -> RespuestaAtencion:
     return RespuestaAtencion(
         lead_id=resultado.lead.lead_id,
         cliente_id=resultado.lead.cliente_id,
@@ -201,7 +206,7 @@ def _a_respuesta(resultado: ResultadoAtencion, canal: Canal) -> RespuestaAtencio
         nivel=int(resultado.decision.nivel),
         estado_decision=resultado.decision.estado.value,
         respuesta=resultado.respuesta,
-        enviada=resultado.enviada,
+        estado_entrega=estado_entrega,
         motivo=resultado.motivo,
         requiere_humano=resultado.lead.requiere_humano,
         escalamiento_id=(
@@ -406,13 +411,15 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         return {"acceso_id": acceso_id, "revocado": True}
 
     # --- webhooks por canal ----------------------------------------------
-    @app.post("/v1/webhooks/whatsapp/{cliente_id}", response_model=RespuestaAtencion)
+    @app.post("/v1/webhooks/whatsapp/{cliente_id}", response_class=Response)
     async def webhook_whatsapp(
         cliente_id: str,
         peticion: Request,
+        tareas: BackgroundTasks,
         x_twilio_signature: str | None = Header(default=None),
         x_webhook_token: str | None = Header(default=None),
-    ) -> RespuestaAtencion:
+    ) -> Response:
+        """Acusa recibo con TwiML vacio; la entrega a Twilio corre despues de responder."""
         carga = await _carga(peticion)
         if servicio.whatsapp.validar_firmas:
             servicio.whatsapp.verificar_firma(
@@ -424,20 +431,22 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             )
         limitar(cliente_id, Canal.WHATSAPP)
 
-        def procesar() -> RespuestaAtencion:
+        def procesar() -> ResultadoAtencion | None:
             with candado_de(cliente_id):
                 evento_id = servicio.whatsapp.identificador_evento(carga)
-                repetido = _respuesta_repetida(servicio, cliente_id, Canal.WHATSAPP, evento_id)
-                if repetido is not None:
-                    return repetido
+                if _respuesta_repetida(servicio, cliente_id, Canal.WHATSAPP, evento_id) is not None:
+                    return None
                 evento = _normalizar(servicio.whatsapp, cliente_id, carga)
                 resultado = servicio.hermes.atender(evento)
-                _entregar(servicio, resultado, Canal.WHATSAPP)
-                respuesta = _a_respuesta(resultado, Canal.WHATSAPP)
+                estado = EstadoEntrega.PENDIENTE if _hay_que_entregar(resultado) else None
+                respuesta = _a_respuesta(resultado, Canal.WHATSAPP, estado)
                 _marcar_evento(servicio, cliente_id, Canal.WHATSAPP, evento_id, respuesta)
-                return respuesta
+                return resultado
 
-        return await run_in_threadpool(procesar)
+        resultado = await run_in_threadpool(procesar)
+        if resultado is not None:
+            tareas.add_task(_entregar, servicio, resultado, Canal.WHATSAPP)
+        return Response(content=TWIML_VACIO, media_type="application/xml")
 
     @app.post(
         "/v1/webhooks/correo/{cliente_id}",
@@ -456,8 +465,8 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
                     return repetido
                 evento = _normalizar(servicio.correo, cliente_id, carga)
                 resultado = servicio.hermes.atender(evento)
-                _entregar(servicio, resultado, Canal.CORREO)
-                respuesta = _a_respuesta(resultado, Canal.CORREO)
+                estado = _entregar(servicio, resultado, Canal.CORREO)
+                respuesta = _a_respuesta(resultado, Canal.CORREO, estado)
                 _marcar_evento(servicio, cliente_id, Canal.CORREO, evento_id, respuesta)
                 return respuesta
 
@@ -499,9 +508,12 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
                     proveedor=evento.metadatos.get("proveedor"),
                     call_sid=evento_id,
                 )
+                estado = EstadoEntrega.PENDIENTE if _hay_que_entregar(atencion) else None
                 cuerpo = {
                     "llamada": llamada.model_dump(mode="json"),
-                    "atencion": _a_respuesta(atencion, Canal.LLAMADA).model_dump(mode="json"),
+                    "atencion": _a_respuesta(atencion, Canal.LLAMADA, estado).model_dump(
+                        mode="json"
+                    ),
                 }
                 if evento_id:
                     servicio.almacen.marcar_evento(
@@ -560,8 +572,7 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         canal = resultado.lead.canal_preferido_lead or resultado.lead.canal_origen
-        _entregar(servicio, resultado, canal)
-        return _a_respuesta(resultado, canal)
+        return _a_respuesta(resultado, canal, _entregar(servicio, resultado, canal))
 
     @app.post(
         "/v1/clientes/{cliente_id}/leads/{lead_id}/cierre",
@@ -1003,22 +1014,27 @@ def _texto(cuerpo: dict) -> str:
     return json.dumps(cuerpo, default=str)
 
 
-def _entregar(servicio: Servicio, resultado: ResultadoAtencion, canal: Canal) -> None:
-    """Envio real por el canal correspondiente; en Nivel 2+ no hay nada que enviar aun."""
-    if not resultado.enviada or not resultado.respuesta:
-        return
+def _hay_que_entregar(resultado: ResultadoAtencion) -> bool:
+    """En Nivel 2+ o con escalamiento la respuesta queda retenida: no hay nada que enviar aun."""
+    return resultado.enviada and bool(resultado.respuesta)
+
+
+def _entregar(
+    servicio: Servicio, resultado: ResultadoAtencion, canal: Canal
+) -> EstadoEntrega | None:
+    """Envio real por el canal; devuelve el estado de entrega que queda en el mensaje."""
+    if not _hay_que_entregar(resultado) or resultado.respuesta is None:
+        return None
     if not servicio.config.envio_real:
-        return
+        return EstadoEntrega.PENDIENTE
     error = _enviar_por_canal(servicio, canal, resultado.lead.contacto, resultado.respuesta)
+    estado = EstadoEntrega.FALLIDA if error else EstadoEntrega.ENVIADA
     if resultado.mensaje_id:
         servicio.almacen.actualizar_entrega(
-            resultado.lead.cliente_id,
-            resultado.mensaje_id,
-            EstadoEntrega.FALLIDA if error else EstadoEntrega.ENVIADA,
-            error,
+            resultado.lead.cliente_id, resultado.mensaje_id, estado, error
         )
     if error is None:
-        return
+        return estado
     servicio.hermes.gobernanza.registrar_resultado(
         resultado.decision.decision_id, f"fallo_envio: {error}"
     )
@@ -1030,6 +1046,7 @@ def _entregar(servicio: Servicio, resultado: ResultadoAtencion, canal: Canal) ->
             )
         except Exception:
             pass
+    return estado
 
 
 def _entregar_texto(
@@ -1051,7 +1068,7 @@ def _enviar_por_canal(servicio: Servicio, canal: Canal, destino: str, texto: str
         elif canal == Canal.CORREO and servicio.correo.configurado:
             servicio.correo.enviar(destino, texto)
         else:
-            return None
+            return f"El canal {canal.value} no tiene credenciales configuradas"
     except Exception as exc:
         return str(exc)
     return None

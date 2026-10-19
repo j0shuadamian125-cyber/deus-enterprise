@@ -234,14 +234,15 @@ def test_reintentos_con_backoff_y_error_final_sin_secretos():
 def test_webhook_repetido_no_duplica_el_lead(cliente_http: TestClient, almacen: Almacen):
     dar_de_alta(almacen)
     carga = {"From": "whatsapp:+5215550001", "Body": "Hola", "MessageSid": "SM-repetido"}
-    primera = cliente_http.post("/v1/webhooks/whatsapp/cli_001", data=carga).json()
-    segunda = cliente_http.post("/v1/webhooks/whatsapp/cli_001", data=carga).json()
+    primera = cliente_http.post("/v1/webhooks/whatsapp/cli_001", data=carga)
+    segunda = cliente_http.post("/v1/webhooks/whatsapp/cli_001", data=carga)
 
-    assert primera == segunda
-    assert len(almacen.listar_leads("cli_001")) == 1
+    assert primera.status_code == segunda.status_code == 200
+    assert primera.text == segunda.text
+    [lead] = almacen.listar_leads("cli_001")
     entrantes = [
         m
-        for m in almacen.historial("cli_001", primera["lead_id"])
+        for m in almacen.historial("cli_001", lead.lead_id)
         if m.direccion == "entrante"
     ]
     assert len(entrantes) == 1

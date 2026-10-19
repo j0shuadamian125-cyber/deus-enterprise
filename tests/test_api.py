@@ -4,9 +4,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from hermes.api import crear_app
+from hermes.api import TWIML_VACIO, crear_app
 from hermes.config import Servicio
-from hermes.models import Etapa
+from hermes.models import Canal, EstadoEntrega, Etapa
 
 CABECERAS = {"X-Panel-Token": "token-de-prueba"}
 
@@ -131,16 +131,21 @@ def test_onboarding_con_grabacion_advierte_del_requisito_legal(cliente_http: Tes
     assert respuesta.json()["advertencias"]
 
 
-def test_webhook_whatsapp_crea_lead_y_responde(cliente_http: TestClient):
+def test_webhook_whatsapp_crea_lead_y_responde(cliente_http: TestClient, servicio: Servicio):
     _alta(cliente_http)
     respuesta = cliente_http.post(
         "/v1/webhooks/whatsapp/cli_001",
         data={"From": "whatsapp:+5215550001", "Body": "Hola, me interesa"},
     )
-    cuerpo = respuesta.json()
     assert respuesta.status_code == 200
-    assert cuerpo["etapa"] == Etapa.PROSPECCION.value
-    assert cuerpo["enviada"] is True
+    assert respuesta.headers["content-type"].startswith("application/xml")
+    assert respuesta.text == TWIML_VACIO
+    [lead] = servicio.almacen.listar_leads("cli_001")
+    assert lead.etapa == Etapa.PROSPECCION
+    salientes = [
+        m for m in servicio.almacen.historial("cli_001", lead.lead_id) if m.direccion == "saliente"
+    ]
+    assert salientes and salientes[-1].estado_entrega == EstadoEntrega.PENDIENTE
 
 
 def test_webhook_de_cliente_inexistente_devuelve_404(cliente_http: TestClient):
@@ -150,16 +155,22 @@ def test_webhook_de_cliente_inexistente_devuelve_404(cliente_http: TestClient):
     assert respuesta.status_code == 404
 
 
-def test_webhook_correo_y_whatsapp_comparten_el_lead(cliente_http: TestClient):
+def test_webhook_correo_y_whatsapp_comparten_el_lead(
+    cliente_http: TestClient, servicio: Servicio
+):
     _alta(cliente_http)
     correo = cliente_http.post(
         "/v1/webhooks/correo/cli_001",
         json={"from": "ana@correo.com", "subject": "Precio", "body": "me interesa"},
     ).json()
-    seguimiento = cliente_http.post(
+    cliente_http.post(
         "/v1/webhooks/whatsapp/cli_001", data={"From": "whatsapp:ana@correo.com", "Body": "cuando?"}
-    ).json()
-    assert seguimiento["lead_id"] == correo["lead_id"]
+    )
+    assert [lead.lead_id for lead in servicio.almacen.listar_leads("cli_001")] == [
+        correo["lead_id"]
+    ]
+    canales = {m.canal for m in servicio.almacen.historial("cli_001", correo["lead_id"])}
+    assert canales == {Canal.CORREO, Canal.WHATSAPP}
 
 
 def test_webhook_llamada_guarda_transcripcion(cliente_http: TestClient):
@@ -210,26 +221,28 @@ def test_respuesta_fuera_de_guion_espera_aprobacion_y_luego_se_envia(
 
     servicio.hermes.generador.motor = MotorLibre()
 
-    atencion = cliente_http.post(
+    cliente_http.post(
         "/v1/webhooks/whatsapp/cli_001", data={"From": "whatsapp:+5215550001", "Body": "hola"}
-    ).json()
-    assert atencion["nivel"] == 2
-    assert atencion["enviada"] is False
+    )
+    [lead] = servicio.almacen.listar_leads("cli_001")
+    historial = servicio.almacen.historial("cli_001", lead.lead_id)
+    assert not [m for m in historial if m.direccion == "saliente"]
 
     pendientes = cliente_http.get(
         "/v1/decisiones", headers=CABECERAS, params={"cliente_id": "cli_001", "estado": "pendiente"}
     ).json()
-    assert pendientes
+    assert len(pendientes) == 1
+    assert pendientes[0]["nivel"] == 2
 
     aprobada = cliente_http.post(
-        f"/v1/decisiones/{atencion['decision_id']}/aprobar",
+        f"/v1/decisiones/{pendientes[0]['decision_id']}/aprobar",
         headers=CABECERAS,
         json={"aprobado_por": "joshua"},
     ).json()
     assert aprobada["estado"] == "aprobada"
 
     detalle = cliente_http.get(
-        f"/v1/clientes/cli_001/leads/{atencion['lead_id']}", headers=CABECERAS
+        f"/v1/clientes/cli_001/leads/{lead.lead_id}", headers=CABECERAS
     ).json()
     salientes = [m for m in detalle["historial"] if m["direccion"] == "saliente"]
     assert salientes and salientes[-1]["texto"] == "Respuesta redactada por el modelo"
@@ -244,13 +257,14 @@ def test_reporte_y_hoja_de_leads(cliente_http: TestClient):
     assert hoja[0]["etapa"] == Etapa.APERTURA.value
 
 
-def test_guion_de_llamada_asistida(cliente_http: TestClient):
+def test_guion_de_llamada_asistida(cliente_http: TestClient, servicio: Servicio):
     _alta(cliente_http)
-    atencion = cliente_http.post(
+    cliente_http.post(
         "/v1/webhooks/whatsapp/cli_001", data={"From": "whatsapp:+521", "Body": "hola"}
-    ).json()
+    )
+    [lead] = servicio.almacen.listar_leads("cli_001")
     respuesta = cliente_http.post(
-        f"/v1/clientes/cli_001/leads/{atencion['lead_id']}/guion-llamada", headers=CABECERAS
+        f"/v1/clientes/cli_001/leads/{lead.lead_id}/guion-llamada", headers=CABECERAS
     )
     assert respuesta.status_code == 200
     assert respuesta.json()["guion"]
