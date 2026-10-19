@@ -27,7 +27,15 @@ from .whatsapp import FirmaInvalidaError, firmar
 
 
 class LlamadaError(RuntimeError):
-    pass
+    """`reintentable=False` cuando Twilio rechaza la peticion (4xx): repetirla no cambia nada."""
+
+    def __init__(self, mensaje: str, reintentable: bool = True) -> None:
+        super().__init__(mensaje)
+        self.reintentable = reintentable
+
+
+def _es_reintentable(exc: Exception) -> bool:
+    return not isinstance(exc, LlamadaError) or exc.reintentable
 
 
 def _primero(carga: Mapping[str, Any], *claves: str) -> Any | None:
@@ -134,7 +142,11 @@ class AdaptadorLlamada:
                 "Faltan credenciales o URL TwiML de voz "
                 "(TWILIO_ACCOUNT_SID/AUTH_TOKEN/TWILIO_VOICE_FROM/TWILIO_VOICE_TWIML_URL)"
             )
-        return reintentar("twilio.calls", lambda: self._llamar_una_vez(destino, url_twiml))
+        return reintentar(
+            "twilio.calls",
+            lambda: self._llamar_una_vez(destino, url_twiml),
+            reintentable=_es_reintentable,
+        )
 
     def _llamar_una_vez(self, destino: str, url_twiml: str | None) -> dict:
         datos = urlencode(
@@ -155,6 +167,9 @@ class AdaptadorLlamada:
                 return json.loads(respuesta.read().decode("utf-8"))
         except HTTPError as exc:
             detalle = exc.read().decode("utf-8", "ignore")[:300]
-            raise LlamadaError(f"Twilio Voice respondio {exc.code}: {redactar(detalle)}") from None
+            raise LlamadaError(
+                f"Twilio Voice respondio {exc.code}: {redactar(detalle)}",
+                reintentable=exc.code >= 500,
+            ) from None
         except Exception as exc:  # noqa: BLE001 - red, DNS, timeout
             raise LlamadaError(f"Fallo de red hacia Twilio Voice: {redactar(str(exc))}") from None

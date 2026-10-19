@@ -92,7 +92,7 @@ Ninguna credencial se guarda en el repositorio.
 | `GET /health` | Estado del modulo |
 | `POST /v1/onboarding` | Alta de cliente con el cuestionario de la Seccion 5.7 |
 | `GET /v1/clientes` | Vista global (solo operador de DEUS) |
-| `POST /v1/webhooks/whatsapp/{cliente_id}` | Webhook de Twilio (form o JSON) |
+| `POST /v1/webhooks/whatsapp/{cliente_id}` | Webhook de Twilio (form o JSON); responde TwiML vacio y entrega en segundo plano |
 | `POST /v1/webhooks/correo/{cliente_id}` | Correo entrante |
 | `POST /v1/webhooks/llamada/{cliente_id}` | Fin de llamada con transcripcion |
 | `GET /v1/clientes/{cliente_id}/leads` | CRM del cliente, filtrable por etapa/estatus/canal |

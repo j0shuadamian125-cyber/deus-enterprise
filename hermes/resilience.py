@@ -58,8 +58,12 @@ def reintentar(
     espera_inicial: float = 0.5,
     factor: float = 2.0,
     dormir: Callable[[float], None] = time.sleep,
+    reintentable: Callable[[Exception], bool] = lambda _exc: True,
 ) -> T:
-    """Backoff exponencial; la excepcion final nunca incluye credenciales."""
+    """Backoff exponencial; la excepcion final nunca incluye credenciales.
+
+    Un error que `reintentable` declara permanente se propaga al primer intento.
+    """
     espera = espera_inicial
     ultimo: Exception | None = None
     for intento in range(1, intentos + 1):
@@ -68,6 +72,8 @@ def reintentar(
         except Exception as exc:  # noqa: BLE001 - se reintenta cualquier fallo de red
             ultimo = exc
             logger.warning("%s: intento %s/%s fallido: %s", operacion, intento, intentos, exc)
+            if not reintentable(exc):
+                raise
             if intento < intentos:
                 dormir(espera)
                 espera *= factor
