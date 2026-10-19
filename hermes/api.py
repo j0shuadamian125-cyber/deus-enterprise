@@ -5,7 +5,10 @@ expone lectura de leads, llamadas, bitacora, escalamientos, estrategias,
 patrones y aprobaciones.
 
 Autenticacion:
-- panel y operaciones: cabecera `X-Panel-Token` (HERMES_PANEL_TOKEN).
+- panel y operaciones: cabecera `X-Panel-Token`. Con HERMES_PANEL_TOKEN el rol
+  es operador (acceso completo); con un token de cliente emitido por el operador
+  el rol es cliente: solo las rutas de `RUTAS_CLIENTE` y solo sobre su tenant;
+  con un token de empleado, solo la cola de intervencion humana (`RUTAS_EMPLEADO`).
 - webhook de WhatsApp: firma `X-Twilio-Signature` (HERMES_URL_PUBLICA + Auth
   Token de Twilio); si la validacion esta desactivada se acepta el token de
   webhook como alternativa.
@@ -14,16 +17,20 @@ Autenticacion:
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import secrets
 import threading
 from collections.abc import Mapping
+from dataclasses import dataclass
 from hmac import compare_digest
-from typing import Protocol
+from typing import Annotated, Literal, Protocol
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
 from .channels.whatsapp import FirmaInvalidaError
@@ -52,6 +59,79 @@ from .sandbox import ESCENARIOS, SandboxError, ejecutar_escenario, ejecutar_todo
 from .storage import AislamientoError
 from .strategies import EstrategiaError
 
+RUTAS_CLIENTE: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("GET", "/health"),
+        ("GET", "/v1/sesion"),
+        ("GET", "/v1/clientes/{cliente_id}"),
+        ("GET", "/v1/clientes/{cliente_id}/leads"),
+        ("GET", "/v1/clientes/{cliente_id}/leads/{lead_id}"),
+        ("GET", "/v1/clientes/{cliente_id}/hoja-leads"),
+        ("GET", "/v1/clientes/{cliente_id}/llamadas"),
+        ("GET", "/v1/clientes/{cliente_id}/reporte"),
+        ("GET", "/v1/clientes/{cliente_id}/reporte.pdf"),
+        ("GET", "/v1/clientes/{cliente_id}/resultados"),
+        ("GET", "/v1/clientes/{cliente_id}/escalamientos"),
+        ("GET", "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}"),
+        ("POST", "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}/intervenir"),
+        ("GET", "/v1/clientes/{cliente_id}/estrategias"),
+        ("POST", "/v1/clientes/{cliente_id}/estrategias/{estrategia_id}/activar"),
+        ("GET", "/v1/clientes/{cliente_id}/patrones"),
+        ("GET", "/v1/clientes/{cliente_id}/decisiones"),
+        ("POST", "/v1/clientes/{cliente_id}/decisiones/{decision_id}/aprobar"),
+        ("POST", "/v1/clientes/{cliente_id}/decisiones/{decision_id}/rechazar"),
+    }
+)
+"""Lista cerrada de lo que alcanza un token de cliente; todo lo demas responde 403."""
+
+RUTAS_EMPLEADO: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("GET", "/health"),
+        ("GET", "/v1/sesion"),
+        ("GET", "/v1/clientes/{cliente_id}/escalamientos"),
+        ("GET", "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}"),
+        ("POST", "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}/intervenir"),
+    }
+)
+"""Un empleado del cliente solo atiende la cola de intervencion humana de su tenant."""
+
+RUTAS_POR_ROL: dict[str, frozenset[tuple[str, str]]] = {
+    "cliente": RUTAS_CLIENTE,
+    "empleado": RUTAS_EMPLEADO,
+}
+
+DECISIONES_DE_CLIENTE = frozenset({"activar_estrategia", "cambio_de_estrategia"})
+
+
+@dataclass(frozen=True)
+class Principal:
+    rol: str
+    cliente_id: str | None = None
+
+    def firma(self, nombre: str) -> str:
+        """Quien resolvio una accion queda en la bitacora con su rol."""
+        if self.cliente_id is not None:
+            return f"{self.rol}:{self.cliente_id}/{nombre}"
+        return nombre
+
+
+OPERADOR = Principal(rol="operador")
+
+
+def rol_actual(peticion: Request) -> Principal:
+    acceso: Principal | None = peticion.state.acceso
+    return acceso or OPERADOR
+
+
+RolActual = Annotated[Principal, Depends(rol_actual)]
+
+
+TWIML_VACIO = '<?xml version="1.0" encoding="UTF-8"?><Response/>'
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
 
 class RespuestaAtencion(BaseModel):
     lead_id: str
@@ -64,7 +144,7 @@ class RespuestaAtencion(BaseModel):
     nivel: int
     estado_decision: str
     respuesta: str | None
-    enviada: bool
+    estado_entrega: EstadoEntrega | None = None
     motivo: str = ""
     requiere_humano: bool = False
     escalamiento_id: str | None = None
@@ -80,6 +160,10 @@ class AprobacionPeticion(BaseModel):
 class RechazoPeticion(BaseModel):
     rechazado_por: str
     motivo: str = ""
+
+
+class AccesoPeticion(BaseModel):
+    rol: Literal["cliente", "empleado"] = "cliente"
 
 
 class IntervencionPeticion(BaseModel):
@@ -108,7 +192,9 @@ class SandboxPeticion(BaseModel):
     contacto: str | None = None
 
 
-def _a_respuesta(resultado: ResultadoAtencion, canal: Canal) -> RespuestaAtencion:
+def _a_respuesta(
+    resultado: ResultadoAtencion, canal: Canal, estado_entrega: EstadoEntrega | None
+) -> RespuestaAtencion:
     return RespuestaAtencion(
         lead_id=resultado.lead.lead_id,
         cliente_id=resultado.lead.cliente_id,
@@ -120,7 +206,7 @@ def _a_respuesta(resultado: ResultadoAtencion, canal: Canal) -> RespuestaAtencio
         nivel=int(resultado.decision.nivel),
         estado_decision=resultado.decision.estado.value,
         respuesta=resultado.respuesta,
-        enviada=resultado.enviada,
+        estado_entrega=estado_entrega,
         motivo=resultado.motivo,
         requiere_humano=resultado.lead.requiere_humano,
         escalamiento_id=(
@@ -133,10 +219,44 @@ def _a_respuesta(resultado: ResultadoAtencion, canal: Canal) -> RespuestaAtencio
 
 def crear_app(servicio: Servicio | None = None, config: Configuracion | None = None) -> FastAPI:
     servicio = servicio or construir_servicio(config)
+
+    def _acceso_de_token(token: str | None) -> Principal | None:
+        if not token:
+            return None
+        esperado = servicio.config.token_panel
+        if not esperado and not servicio.config.permitir_sin_token:
+            return None
+        if esperado and compare_digest(token, esperado):
+            return None
+        acceso = servicio.almacen.acceso_de_hash(_hash_token(token))
+        if acceso is None or acceso[1] not in RUTAS_POR_ROL:
+            return None
+        return Principal(rol=acceso[1], cliente_id=acceso[0])
+
+    def control_de_rol(
+        peticion: Request, x_panel_token: str | None = Header(default=None)
+    ) -> None:
+        """Se aplica a todas las rutas: deny by default para los roles de tenant."""
+        acceso = _acceso_de_token(x_panel_token)
+        peticion.state.acceso = acceso
+        if acceso is None:
+            return
+        ruta = peticion.scope.get("route")
+        permitidas = RUTAS_POR_ROL[acceso.rol]
+        if not isinstance(ruta, APIRoute) or (peticion.method, ruta.path) not in permitidas:
+            raise HTTPException(
+                status_code=403, detail=f"Ruta no disponible para el rol {acceso.rol}"
+            )
+        if peticion.path_params.get("cliente_id", acceso.cliente_id) != acceso.cliente_id:
+            raise HTTPException(
+                status_code=403, detail=f"El token de {acceso.rol} no da acceso a otro tenant"
+            )
+
     app = FastAPI(
         title="HERMES",
         version="4.0",
         description="Modulo de ventas y atencion multicanal de DEUS",
+        dependencies=[Depends(control_de_rol)],
     )
     app.state.servicio = servicio
     limitador = LimitadorTasa(maximo=servicio.config.limite_webhook_por_minuto)
@@ -173,7 +293,9 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         if not recibido or not compare_digest(recibido, esperado):
             raise HTTPException(status_code=401, detail=f"Token invalido ({variable})")
 
-    def autorizar(x_panel_token: str | None = Header(default=None)) -> None:
+    def autorizar(peticion: Request, x_panel_token: str | None = Header(default=None)) -> None:
+        if peticion.state.acceso is not None:
+            return
         _exigir_token(x_panel_token, servicio.config.token_panel, "HERMES_PANEL_TOKEN")
 
     def autorizar_webhook(x_webhook_token: str | None = Header(default=None)) -> None:
@@ -227,6 +349,18 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             "token_webhook_configurado": bool(servicio.config.token_webhook),
         }
 
+    @app.get("/v1/sesion", dependencies=[Depends(autorizar)])
+    def sesion(principal: RolActual) -> dict:
+        nombre = None
+        if principal.cliente_id is not None:
+            registro = servicio.almacen.obtener_cliente(principal.cliente_id)
+            nombre = registro.nombre_negocio if registro else None
+        return {
+            "rol": principal.rol,
+            "cliente_id": principal.cliente_id,
+            "nombre_negocio": nombre,
+        }
+
     # --- onboarding ----------------------------------------------------
     @app.post("/v1/onboarding", dependencies=[Depends(autorizar)])
     def onboarding(respuestas: RespuestasOnboarding) -> dict:
@@ -248,14 +382,44 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             raise HTTPException(status_code=404, detail="Cliente inexistente")
         return registro.model_dump(mode="json")
 
+    # --- accesos de cliente y empleado (solo operador) --------------------
+    @app.post(
+        "/v1/clientes/{cliente_id}/accesos",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def crear_acceso(cliente_id: str, peticion: AccesoPeticion | None = None) -> dict:
+        """El token se devuelve una sola vez; en la base solo queda su hash."""
+        rol = peticion.rol if peticion else "cliente"
+        token = secrets.token_urlsafe(32)
+        acceso = servicio.almacen.crear_acceso(cliente_id, _hash_token(token), rol)
+        return {**acceso, "token": token}
+
+    @app.get(
+        "/v1/clientes/{cliente_id}/accesos",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def accesos(cliente_id: str) -> list[dict]:
+        return servicio.almacen.listar_accesos(cliente_id)
+
+    @app.post(
+        "/v1/clientes/{cliente_id}/accesos/{acceso_id}/revocar",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def revocar_acceso(cliente_id: str, acceso_id: str) -> dict:
+        if not servicio.almacen.revocar_acceso(cliente_id, acceso_id):
+            raise HTTPException(status_code=404, detail="Acceso inexistente o ya revocado")
+        return {"acceso_id": acceso_id, "revocado": True}
+
     # --- webhooks por canal ----------------------------------------------
-    @app.post("/v1/webhooks/whatsapp/{cliente_id}", response_model=RespuestaAtencion)
+    @app.post("/v1/webhooks/whatsapp/{cliente_id}", response_class=Response)
     async def webhook_whatsapp(
         cliente_id: str,
         peticion: Request,
+        tareas: BackgroundTasks,
         x_twilio_signature: str | None = Header(default=None),
         x_webhook_token: str | None = Header(default=None),
-    ) -> RespuestaAtencion:
+    ) -> Response:
+        """Acusa recibo con TwiML vacio; la entrega a Twilio corre despues de responder."""
         carga = await _carga(peticion)
         if servicio.whatsapp.validar_firmas:
             servicio.whatsapp.verificar_firma(
@@ -267,20 +431,22 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             )
         limitar(cliente_id, Canal.WHATSAPP)
 
-        def procesar() -> RespuestaAtencion:
+        def procesar() -> ResultadoAtencion | None:
             with candado_de(cliente_id):
                 evento_id = servicio.whatsapp.identificador_evento(carga)
-                repetido = _respuesta_repetida(servicio, cliente_id, Canal.WHATSAPP, evento_id)
-                if repetido is not None:
-                    return repetido
+                if _respuesta_repetida(servicio, cliente_id, Canal.WHATSAPP, evento_id) is not None:
+                    return None
                 evento = _normalizar(servicio.whatsapp, cliente_id, carga)
                 resultado = servicio.hermes.atender(evento)
-                _entregar(servicio, resultado, Canal.WHATSAPP)
-                respuesta = _a_respuesta(resultado, Canal.WHATSAPP)
+                estado = EstadoEntrega.PENDIENTE if _hay_que_entregar(resultado) else None
+                respuesta = _a_respuesta(resultado, Canal.WHATSAPP, estado)
                 _marcar_evento(servicio, cliente_id, Canal.WHATSAPP, evento_id, respuesta)
-                return respuesta
+                return resultado
 
-        return await run_in_threadpool(procesar)
+        resultado = await run_in_threadpool(procesar)
+        if resultado is not None:
+            tareas.add_task(_entregar, servicio, resultado, Canal.WHATSAPP)
+        return Response(content=TWIML_VACIO, media_type="application/xml")
 
     @app.post(
         "/v1/webhooks/correo/{cliente_id}",
@@ -299,8 +465,8 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
                     return repetido
                 evento = _normalizar(servicio.correo, cliente_id, carga)
                 resultado = servicio.hermes.atender(evento)
-                _entregar(servicio, resultado, Canal.CORREO)
-                respuesta = _a_respuesta(resultado, Canal.CORREO)
+                estado = _entregar(servicio, resultado, Canal.CORREO)
+                respuesta = _a_respuesta(resultado, Canal.CORREO, estado)
                 _marcar_evento(servicio, cliente_id, Canal.CORREO, evento_id, respuesta)
                 return respuesta
 
@@ -342,9 +508,12 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
                     proveedor=evento.metadatos.get("proveedor"),
                     call_sid=evento_id,
                 )
+                estado = EstadoEntrega.PENDIENTE if _hay_que_entregar(atencion) else None
                 cuerpo = {
                     "llamada": llamada.model_dump(mode="json"),
-                    "atencion": _a_respuesta(atencion, Canal.LLAMADA).model_dump(mode="json"),
+                    "atencion": _a_respuesta(atencion, Canal.LLAMADA, estado).model_dump(
+                        mode="json"
+                    ),
                 }
                 if evento_id:
                     servicio.almacen.marcar_evento(
@@ -403,8 +572,7 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         canal = resultado.lead.canal_preferido_lead or resultado.lead.canal_origen
-        _entregar(servicio, resultado, canal)
-        return _a_respuesta(resultado, canal)
+        return _a_respuesta(resultado, canal, _entregar(servicio, resultado, canal))
 
     @app.post(
         "/v1/clientes/{cliente_id}/leads/{lead_id}/cierre",
@@ -511,12 +679,17 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
         "/v1/clientes/{cliente_id}/escalamientos/{escalamiento_id}/intervenir",
         dependencies=[Depends(autorizar), Depends(exigir_cliente)],
     )
-    def intervenir(cliente_id: str, escalamiento_id: str, peticion: IntervencionPeticion) -> dict:
+    def intervenir(
+        cliente_id: str,
+        escalamiento_id: str,
+        peticion: IntervencionPeticion,
+        principal: RolActual,
+    ) -> dict:
         try:
             registro, texto = servicio.hermes.resolver_escalamiento(
                 cliente_id=cliente_id,
                 escalamiento_id=escalamiento_id,
-                atendido_por=peticion.atendido_por,
+                atendido_por=principal.firma(peticion.atendido_por),
                 accion=peticion.accion,
                 respuesta=peticion.respuesta,
                 resultado=peticion.resultado,
@@ -671,26 +844,86 @@ def crear_app(servicio: Servicio | None = None, config: Configuracion | None = N
             for decision in servicio.almacen.listar_decisiones(cliente_id=cliente_id, estado=estado)
         ]
 
-    @app.post("/v1/decisiones/{decision_id}/aprobar", dependencies=[Depends(autorizar)])
-    def aprobar(decision_id: str, peticion: AprobacionPeticion) -> dict:
+    def _aprobar(decision_id: str, por: str, canal: CanalConfirmacion) -> dict:
         try:
-            decision = servicio.gobernanza.aprobar(
-                decision_id, peticion.aprobado_por, peticion.canal_confirmacion
-            )
+            decision = servicio.gobernanza.aprobar(decision_id, por, canal)
         except GobernanzaError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         _ejecutar_pendiente(servicio, decision_id)
         return decision.model_dump(mode="json")
 
-    @app.post("/v1/decisiones/{decision_id}/rechazar", dependencies=[Depends(autorizar)])
-    def rechazar(decision_id: str, peticion: RechazoPeticion) -> dict:
+    def _rechazar(decision_id: str, por: str, motivo: str) -> dict:
         try:
-            decision = servicio.gobernanza.rechazar(
-                decision_id, peticion.rechazado_por, peticion.motivo
-            )
+            decision = servicio.gobernanza.rechazar(decision_id, por, motivo)
         except GobernanzaError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return decision.model_dump(mode="json")
+
+    def _exigir_decision_del_tenant(
+        cliente_id: str, decision_id: str, principal: Principal
+    ) -> None:
+        decision = servicio.almacen.obtener_decision(decision_id)
+        if decision is None or decision.cliente_id != cliente_id:
+            raise HTTPException(status_code=404, detail="Decision inexistente para ese cliente")
+        if (
+            principal.rol == "cliente"
+            and decision.payload.get("accion") not in DECISIONES_DE_CLIENTE
+        ):
+            raise HTTPException(
+                status_code=403, detail="El rol cliente solo resuelve decisiones de estrategia"
+            )
+
+    @app.post("/v1/decisiones/{decision_id}/aprobar", dependencies=[Depends(autorizar)])
+    def aprobar(decision_id: str, peticion: AprobacionPeticion) -> dict:
+        return _aprobar(decision_id, peticion.aprobado_por, peticion.canal_confirmacion)
+
+    @app.post("/v1/decisiones/{decision_id}/rechazar", dependencies=[Depends(autorizar)])
+    def rechazar(decision_id: str, peticion: RechazoPeticion) -> dict:
+        return _rechazar(decision_id, peticion.rechazado_por, peticion.motivo)
+
+    @app.get(
+        "/v1/clientes/{cliente_id}/decisiones",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def decisiones_del_tenant(
+        cliente_id: str,
+        principal: RolActual,
+        estado: str | None = None,
+    ) -> list[dict]:
+        lista = servicio.almacen.listar_decisiones(cliente_id=cliente_id, estado=estado)
+        if principal.rol == "cliente":
+            lista = [d for d in lista if d.payload.get("accion") in DECISIONES_DE_CLIENTE]
+        return [decision.model_dump(mode="json") for decision in lista]
+
+    @app.post(
+        "/v1/clientes/{cliente_id}/decisiones/{decision_id}/aprobar",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def aprobar_del_tenant(
+        cliente_id: str,
+        decision_id: str,
+        peticion: AprobacionPeticion,
+        principal: RolActual,
+    ) -> dict:
+        _exigir_decision_del_tenant(cliente_id, decision_id, principal)
+        # El cliente no puede declarar por si mismo la segunda confirmacion de Nivel 4.
+        canal = (
+            CanalConfirmacion.CHAT if principal.rol == "cliente" else peticion.canal_confirmacion
+        )
+        return _aprobar(decision_id, principal.firma(peticion.aprobado_por), canal)
+
+    @app.post(
+        "/v1/clientes/{cliente_id}/decisiones/{decision_id}/rechazar",
+        dependencies=[Depends(autorizar), Depends(exigir_cliente)],
+    )
+    def rechazar_del_tenant(
+        cliente_id: str,
+        decision_id: str,
+        peticion: RechazoPeticion,
+        principal: RolActual,
+    ) -> dict:
+        _exigir_decision_del_tenant(cliente_id, decision_id, principal)
+        return _rechazar(decision_id, principal.firma(peticion.rechazado_por), peticion.motivo)
 
     @app.post("/v1/decisiones/caducar-nivel-4", dependencies=[Depends(autorizar)])
     def caducar() -> list[dict]:
@@ -781,22 +1014,27 @@ def _texto(cuerpo: dict) -> str:
     return json.dumps(cuerpo, default=str)
 
 
-def _entregar(servicio: Servicio, resultado: ResultadoAtencion, canal: Canal) -> None:
-    """Envio real por el canal correspondiente; en Nivel 2+ no hay nada que enviar aun."""
-    if not resultado.enviada or not resultado.respuesta:
-        return
+def _hay_que_entregar(resultado: ResultadoAtencion) -> bool:
+    """En Nivel 2+ o con escalamiento la respuesta queda retenida: no hay nada que enviar aun."""
+    return resultado.enviada and bool(resultado.respuesta)
+
+
+def _entregar(
+    servicio: Servicio, resultado: ResultadoAtencion, canal: Canal
+) -> EstadoEntrega | None:
+    """Envio real por el canal; devuelve el estado de entrega que queda en el mensaje."""
+    if not _hay_que_entregar(resultado) or resultado.respuesta is None:
+        return None
     if not servicio.config.envio_real:
-        return
+        return EstadoEntrega.PENDIENTE
     error = _enviar_por_canal(servicio, canal, resultado.lead.contacto, resultado.respuesta)
+    estado = EstadoEntrega.FALLIDA if error else EstadoEntrega.ENVIADA
     if resultado.mensaje_id:
         servicio.almacen.actualizar_entrega(
-            resultado.lead.cliente_id,
-            resultado.mensaje_id,
-            EstadoEntrega.FALLIDA if error else EstadoEntrega.ENVIADA,
-            error,
+            resultado.lead.cliente_id, resultado.mensaje_id, estado, error
         )
     if error is None:
-        return
+        return estado
     servicio.hermes.gobernanza.registrar_resultado(
         resultado.decision.decision_id, f"fallo_envio: {error}"
     )
@@ -808,6 +1046,7 @@ def _entregar(servicio: Servicio, resultado: ResultadoAtencion, canal: Canal) ->
             )
         except Exception:
             pass
+    return estado
 
 
 def _entregar_texto(
@@ -829,7 +1068,7 @@ def _enviar_por_canal(servicio: Servicio, canal: Canal, destino: str, texto: str
         elif canal == Canal.CORREO and servicio.correo.configurado:
             servicio.correo.enviar(destino, texto)
         else:
-            return None
+            return f"El canal {canal.value} no tiene credenciales configuradas"
     except Exception as exc:
         return str(exc)
     return None
