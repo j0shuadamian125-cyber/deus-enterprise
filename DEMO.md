@@ -167,7 +167,7 @@ Si pierdes un token, el operador emite otro desde la vista **Accesos** del panel
 | Min | Acción | Qué se ve |
 | --- | --- | --- |
 | 0:00 | **Jefe:** abre Pipeline | Solo ve su tienda, sin selector de tenants. 7 leads repartidos en Apertura, Prospección, Cierre y Seguimiento, con conteos por etapa. Al abrir un lead se ve su conversación completa. |
-| 0:45 | Desde tu WhatsApp, al Sandbox: `Hola, me interesa una sala modular` | Llega la respuesta del guion: "Perfecto. Para darle la mejor opción, ¿para cuándo lo necesita?". En el Pipeline del jefe (refresca) aparece un lead nuevo en **Prospección**. |
+| 0:45 | Desde tu WhatsApp, al Sandbox: `Hola, me interesa una sala modular` | Llega la respuesta del guion, literal y sin tildes: "Perfecto, <nombre>. Para darle la mejor opcion, para cuando lo necesita?". En el Pipeline del jefe (refresca) aparece un lead nuevo en **Prospección**. |
 | 1:30 | WhatsApp: `Cuanto cuesta? la quiero comprar esta semana` | El bot propone agendar. El lead pasa a **Cierre** y su detalle muestra intención, urgencia y señales de compra. |
 | 2:15 | WhatsApp: `Quiero hablar con una persona` | El bot **no** contesta: escala. |
 | 2:30 | **Empleado:** abre Intervención | Solo existe esta vista. Aparece tu caso con el motivo `solicita_humano`, la conversación y la recomendación de HERMES, junto a los 3 casos precargados. |
@@ -219,7 +219,10 @@ El onboarding **reemplaza el registro completo** del tenant, así que envía tod
 curl -s -X POST http://127.0.0.1:8000/v1/onboarding \
   -H "X-Panel-Token: $HERMES_PANEL_TOKEN" -H "Content-Type: application/json" \
   -d '{"cliente_id":"demo_tienda","nombre_negocio":"Muebles Aurora (demo)",
+       "representante":"Ana Jefa","industria":"Muebles y decoracion",
+       "descripcion_negocio":"Tienda de muebles con entrega a domicilio en la ciudad.",
        "productos":["Sala modular","Comedor 6 sillas","Recamara matrimonial"],
+       "objetivos":["Agendar visitas a showroom","Cerrar ventas por WhatsApp"],
        "zona_horaria":"America/Mexico_City","telefono_whatsapp":"+14155238886",
        "reglas_escalamiento":{"palabras_clave_extra":["garantia"],"descuento_maximo_por_ciento":0}}'
 ```
