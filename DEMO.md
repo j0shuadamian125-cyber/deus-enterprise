@@ -5,7 +5,7 @@ Todo corre en local; ngrok publica el webhook. No hace falta hosting.
 
 ## 1. Levantar HERMES desde cero
 
-Requisitos: Python 3.11+, Node 18+, una cuenta de ngrok (gratis, versión 3.20 o superior) y una cuenta de Twilio con el Sandbox de WhatsApp.
+Requisitos: Python 3.10+, Node 18+, ngrok reciente (gratis; la 3.19 fue rechazada, la 3.39 funcionó) y una cuenta de Twilio con el Sandbox de WhatsApp.
 
 ```bash
 git clone https://github.com/j0shuadamian125-cyber/deus-enterprise.git
@@ -171,7 +171,7 @@ Si pierdes un token, el operador emite otro desde la vista **Accesos** del panel
 | 1:30 | WhatsApp: `Cuanto cuesta? la quiero comprar esta semana` | El bot propone agendar. El lead pasa a **Cierre** y su detalle muestra intención, urgencia y señales de compra. |
 | 2:15 | WhatsApp: `Quiero hablar con una persona` | El bot **no** contesta: escala. |
 | 2:30 | **Empleado:** abre Intervención | Solo existe esta vista. Aparece tu caso con el motivo `solicita_humano`, la conversación y la recomendación de HERMES, junto a los 3 casos precargados. |
-| 3:00 | **Empleado:** escribe una respuesta propia y la envía (Editar) | Te llega por WhatsApp. El caso queda resuelto, firmado como `empleado:demo_tienda/<nombre>`. |
+| 3:00 | **Empleado:** escribe una respuesta propia y pulsa **Enviar editada** | Te llega por WhatsApp. El caso queda resuelto, firmado como `empleado:demo_tienda/<nombre>`. |
 | 3:45 | **Jefe:** Aprobaciones → aprueba "Invitar al showroom"; Estrategias → la activa | El jefe decide qué estrategia usa la IA. El empleado no puede hacerlo: la API le responde 403. |
 | 4:20 | **Jefe:** Reporte → descarga el PDF | Conteos por etapa, ganados y perdidos, escalamientos y conclusión. |
 | 4:45 | Cierre | Cada tenant y cada rol ve solo lo suyo; toda acción queda registrada en la bitácora. |
@@ -185,7 +185,7 @@ Solo nombres; los valores no se guardan en el repositorio.
 | Variable | Obligatoria para la demo |
 | --- | --- |
 | `HERMES_PANEL_TOKEN` | Sí (sin ella la API responde 503) |
-| `HERMES_WEBHOOK_TOKEN` | Sí (webhooks de correo y voz) |
+| `HERMES_WEBHOOK_TOKEN` | No (solo webhooks de correo y voz; WhatsApp usa la firma de Twilio) |
 | `HERMES_DB` | Sí |
 | `HERMES_URL_PUBLICA` | Sí |
 | `HERMES_ENVIO_REAL` | Sí |
@@ -239,11 +239,11 @@ curl -s -X POST http://127.0.0.1:8000/v1/onboarding \
 | El webhook responde **404** | El `cliente_id` de la URL no existe en esa `HERMES_DB` | Carga el tenant (sección 2) o corrige la URL. |
 | Todo responde **503** | Falta `HERMES_PANEL_TOKEN` | Exporta la variable y reinicia la API. |
 | Responde **429** | Superaste `HERMES_LIMITE_WEBHOOK` por minuto, tenant y canal | Espera un minuto o súbelo. |
-| El bot no contesta por WhatsApp | `HERMES_ENVIO_REAL=false`, el mensaje se escaló o no hay credenciales | Revisa `/v1/estado`; el detalle del lead muestra `estado_entrega` (`pendiente`, `enviada` o `fallida`) y la vista Intervención los escalados. |
+| El bot no contesta por WhatsApp | `HERMES_ENVIO_REAL=false`, el mensaje se escaló o no hay credenciales | Revisa `/v1/estado` y la vista Intervención. `GET /v1/clientes/<id>/leads/<lead_id>` devuelve el `estado_entrega` de cada mensaje (`pendiente`, `enviada` o `fallida`) con su error. |
 | Mensaje `fallida` con error **63038** | La cuenta Trial ya mandó sus 5 mensajes del día | Espera al día siguiente o pasa la cuenta a pago. |
 | Twilio no entrega a un número | Ese número no se unió al Sandbox o la unión caducó (unos 3 días) | Reenvía `join <código>`. |
 | Fallan los mensajes fuera de las 24 h | WhatsApp solo permite plantillas aprobadas fuera de esa ventana | Haz que el lead escriba primero; los seguimientos automáticos de 48 h fallarán en el Sandbox. |
-| ngrok rechaza la sesión (`ERR_NGROK_121`) | Versión de ngrok demasiado vieja | Instala la 3.20 o posterior. |
+| ngrok rechaza la sesión por versión | El agente de ngrok es demasiado viejo para la cuenta (la 3.19 fue rechazada; la 3.39 funcionó) | Actualiza ngrok (`ngrok update` o descarga la última). |
 | El panel no carga datos | La API no está en `:8000`, o el panel se sirve desde otro origen | Usa `npm run dev`, o define `HERMES_API`, o añade el origen en `HERMES_ORIGENES_PANEL`. |
 | El bot repite preguntas, escala frases normales ("para esta semana") o tras "como pago?" contesta "Retomo su solicitud…" | Sin Claude, HERMES clasifica por palabras clave y usa el guion fijo por etapa | Configura `ANTHROPIC_API_KEY`, o usa en la demo los mensajes de la sección 3, que están probados. |
 | Una respuesta se queda `pendiente` para siempre | La entrega corre en segundo plano en memoria: si la API se reinicia justo después de recibir el mensaje, esa entrega se pierde | Limitación conocida, aceptada para el piloto. Responde desde el panel. Antes de manejar volumen real hace falta un outbox persistente. |
